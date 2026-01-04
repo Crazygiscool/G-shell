@@ -3,6 +3,8 @@ use pathsearch::find_executable_in_path;
 use std::os::unix::process::CommandExt;
 use std::fs::File;
 use std::process::Command;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::fs::OpenOptions;
 
 fn main() {
     let mut command: String = String::new();
@@ -185,6 +187,32 @@ fn main() {
         }
     }
 
+    fn redirect_stdout_to(filename: &str) -> Option<RawFd> {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(filename)
+            .ok()?;
+
+        let new_fd = file.as_raw_fd();
+        let old_fd = unsafe { libc::dup(1) };
+
+        unsafe {
+            libc::dup2(new_fd, 1);
+        }
+
+        Some(old_fd)
+    }
+
+    fn restore_stdout(old_fd: RawFd) {
+        unsafe {
+            libc::dup2(old_fd, 1);
+            libc::close(old_fd);
+        }
+    }
+
+
     fn process_command(command: &str) {
         let regix: &[[&str; 2]; 5] = &[
             ["echo", "builtin"],
@@ -228,9 +256,19 @@ fn main() {
         let cmd = tokens[0].as_str();
         let args_vec: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
 
+        let mut old_stdout: Option<RawFd> = None;
+
+        if let Some((filename, fd)) = redirect.as_ref() {
+            if *fd == 1 {
+                old_stdout = redirect_stdout_to(filename);
+            }
+        }
+
         match cmd {
             "exit" => std::process::exit(0),
+
             "echo" => echo(&args_vec),
+
             "type" => {
                 if let Some(first) = args_vec.first() {
                     r#type(first, regix);
@@ -238,7 +276,9 @@ fn main() {
                     eprintln!("type: missing operand");
                 }
             }
+
             "pwd" => pwd(),
+
             "cd" => {
                 if let Some(first) = args_vec.first() {
                     cd(first);
@@ -246,7 +286,12 @@ fn main() {
                     cd("");
                 }
             }
+
             _ => execute(cmd, &args_vec, redirect.as_ref().map(|(f, fd)| (f.as_str(), *fd))),
+        }
+
+        if let Some(fd) = old_stdout {
+            restore_stdout(fd);
         }
     }
 
