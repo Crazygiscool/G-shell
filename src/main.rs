@@ -2,32 +2,46 @@ use std::io::{self, Write};
 
 fn main() {
     let mut command: String = String::new();
+    let regix: &[[&str; 2]; 3] = &[
+        ["echo", "builtin"],
+        ["type", "builtin"],
+        ["exit", "builtin"],
+    ];
 
     fn echo(string: &str) {
-        let echo_content = string[5..].trim();
-        println!("{}", echo_content);
+        println!("{}", string);
+    }
+
+    fn r#type(command: &str, regix: &[[&str; 2]; 3]) {
+        if let Some(entry) = regix.iter().find(|cmd| cmd[0] == command) {
+            println!("{} is a shell {}", entry[0], entry[1]);
+        } else {
+            println!("{}: not found", command);
+        }
     }
 
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
         io::stdin().read_line(&mut command).unwrap();
+        let mut parts = command.trim().split_whitespace();
+        let cmd = parts.next().unwrap_or("");
+        let mut content = parts.collect::<Vec<_>>().join(" ");
         
-        let cmd = command.trim();
         
         if cmd.is_empty() {
             command.clear();
             continue;
         }
         
-        let command_name = cmd.split_whitespace().next().unwrap_or("");
-        
-        match command_name {
+        match cmd {
             "exit" => break,
-            "echo" => echo(&command),
-            _ => println!("{}: command not found", command_name),
+            "echo" => echo(&content),
+            "type" => r#type(&content, regix),
+            _ => println!("{}: command not found", cmd),
         }
 
         command.clear();
+        content.clear();
     }
 }
