@@ -18,15 +18,44 @@ fn main() {
         let mut in_dq = false;
         let mut escape = false;
 
-        for c in s.chars() {
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
             if escape {
-                // backslash makes next char literal
-                cur.push(c);
+                // interpret common escape sequences when not in single quotes
+                let pushed = match c {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    '\\' => '\\',
+                    '\'' => '\'',
+                    '"' => '"',
+                    d if d.is_ascii_digit() => {
+                        // parse up to 3 octal digits (including this one)
+                        let mut val = d as u32 - '0' as u32;
+                        for _ in 0..2 {
+                            if let Some(peek) = chars.peek() {
+                                if peek.is_ascii_digit() && *peek <= '7' {
+                                    let dd = chars.next().unwrap();
+                                    val = val * 8 + (dd as u32 - '0' as u32);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        // safety: map to a valid char (0-255)
+                        let byte = (val & 0xff) as u8;
+                        cur.push(byte as char);
+                        escape = false;
+                        continue;
+                    }
+                    other => other,
+                };
+                cur.push(pushed);
                 escape = false;
                 continue;
             }
 
-            if c == '\\' {
+            if c == '\\' && !in_sq {
                 escape = true;
                 continue;
             }
@@ -51,7 +80,7 @@ fn main() {
         }
 
         if escape {
-            // trailing backslash: treat it as a literal backslash
+            // trailing backslash: keep it as literal backslash
             cur.push('\\');
         }
 
