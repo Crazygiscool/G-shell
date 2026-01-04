@@ -10,57 +10,95 @@ fn main() {
     // - whitespace separates words (consecutive whitespace collapsed)
     // - single or double quotes preserve spaces and characters literally
     // - adjacent quoted/ unquoted parts without intervening whitespace are concatenated
-    fn parse_args(input: &str) -> Vec<String> {
-        let s = input.trim_end_matches(|c| c == '\n' || c == '\r');
-        let mut args: Vec<String> = Vec::new();
+    fn tokenize(input: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
         let mut cur = String::new();
-        let mut in_sq = false;
-        let mut in_dq = false;
-        let mut escape = false;
 
-        let mut chars = s.chars().peekable();
+        let mut chars = input.chars().peekable();
+
+        let mut in_single = false;
+        let mut in_double = false;
+
         while let Some(c) = chars.next() {
-            if escape {
-                // backslash makes next character literal (no C-like escapes)
-                cur.push(c);
-                escape = false;
-                continue;
-            }
-
-            if c == '\\' && !in_sq {
-                escape = true;
-                continue;
-            }
-
-            if c == '\'' && !in_dq {
-                in_sq = !in_sq;
-                continue;
-            }
-            if c == '"' && !in_sq {
-                in_dq = !in_dq;
-                continue;
-            }
-
-            if c.is_whitespace() && !in_sq && !in_dq {
-                if !cur.is_empty() {
-                    args.push(cur);
-                    cur = String::new();
+            match c {
+                // -------------------------
+                // SINGLE QUOTES
+                // -------------------------
+                '\'' if !in_double => {
+                    in_single = !in_single;
                 }
-            } else {
-                cur.push(c);
-            }
-        }
 
-        if escape {
-            // trailing backslash: keep it as literal backslash
-            cur.push('\\');
+                // -------------------------
+                // DOUBLE QUOTES
+                // -------------------------
+                '"' if !in_single => {
+                    in_double = !in_double;
+                }
+
+                // -------------------------
+                // BACKSLASH HANDLING
+                // -------------------------
+                '\\' => {
+                    if in_single {
+                        // literal backslash inside single quotes
+                        cur.push('\\');
+                    } else if in_double {
+                        // only \" and \\ are special
+                        match chars.peek() {
+                            Some('"') => {
+                                chars.next();
+                                cur.push('"');
+                            }
+                            Some('\\') => {
+                                chars.next();
+                                cur.push('\\');
+                            }
+                            Some('\n') => {
+                                chars.next(); // remove newline
+                            }
+                            Some(_) => {
+                                // literal backslash + char
+                                cur.push('\\');
+                                cur.push(chars.next().unwrap());
+                            }
+                            None => cur.push('\\'),
+                        }
+                    } else {
+                        // outside quotes
+                        match chars.peek() {
+                            Some('\n') => {
+                                chars.next(); // remove newline
+                            }
+                            Some(_) => {
+                                cur.push(chars.next().unwrap());
+                            }
+                            None => cur.push('\\'),
+                        }
+                    }
+                }
+
+                // -------------------------
+                // WHITESPACE SPLITTING
+                // -------------------------
+                c if c.is_whitespace() && !in_single && !in_double => {
+                    if !cur.is_empty() {
+                        tokens.push(cur);
+                        cur = String::new();
+                    }
+                }
+
+                // -------------------------
+                // NORMAL CHARACTER
+                // -------------------------
+                _ => cur.push(c),
+            }
         }
 
         if !cur.is_empty() {
-            args.push(cur);
+            tokens.push(cur);
         }
 
-        args
+        tokens
     }
 
     fn echo(args: &[&str]) {
@@ -145,7 +183,7 @@ fn main() {
             ["cd", "builtin"],
         ];
 
-        let tokens = parse_args(command);
+        let tokens = tokenize(command);
         if tokens.is_empty() {
             return;
         }
