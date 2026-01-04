@@ -15,6 +15,13 @@ fn main() {
         println!("{}", string);
     }
 
+    fn pwd() {
+        match std::env::current_dir() {
+            Ok(path) => println!("{}", path.display()),
+            Err(e) => eprintln!("Error getting current directory: {}", e),
+        }
+    }
+
     fn r#type(command: &str, regix: &[[&str; 2]; 3]) {
         if let Some(entry) = regix.iter().find(|cmd| cmd[0] == command) {
             println!("{} is a shell {}", entry[0], entry[1]);
@@ -64,6 +71,7 @@ fn main() {
             "exit" => break,
             "echo" => echo(&content),
             "type" => r#type(&content, regix),
+            "pwd" => pwd(),
             _ => execute(cmd, &args),
         }
 
