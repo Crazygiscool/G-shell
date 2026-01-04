@@ -5,16 +5,42 @@ use std::os::unix::process::CommandExt;
 
 fn main() {
     let mut command: String = String::new();
-    let regix: &[[&str; 2]; 5] = &[
-        ["echo", "builtin"],
-        ["type", "builtin"],
-        ["exit", "builtin"],
-        ["pwd", "builtin"],
-        ["cd", "builtin"],
-    ];
 
-    fn echo(string: &str) {
-        println!("{}", string);
+    // Parse arguments following simple single-quote rules:
+    // - whitespace separates words (consecutive whitespace collapsed)
+    // - single quotes preserve spaces and characters literally
+    // - adjacent quoted/ unquoted parts without intervening whitespace are concatenated
+    fn parse_args(input: &str) -> Vec<String> {
+        let s = input.trim_end_matches(|c| c == '\n' || c == '\r');
+        let mut args: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        let mut in_sq = false;
+
+        for c in s.chars() {
+            if c == '\'' {
+                in_sq = !in_sq;
+                continue;
+            }
+
+            if c.is_whitespace() && !in_sq {
+                if !cur.is_empty() {
+                    args.push(cur);
+                    cur = String::new();
+                }
+            } else {
+                cur.push(c);
+            }
+        }
+
+        if !cur.is_empty() {
+            args.push(cur);
+        }
+
+        args
+    }
+
+    fn echo(args: &[&str]) {
+        println!("{}", args.join(" "));
     }
 
     fn pwd() {
@@ -32,35 +58,35 @@ fn main() {
                 });
             }
             return;
-        }else if directory == ".." {
+        } else if directory == ".." {
             if let Some(parent) = std::env::current_dir().unwrap().parent() {
                 std::env::set_current_dir(parent).unwrap_or_else(|_e| {
                     eprintln!("cd: {}: No such file or directory", directory);
                 });
             }
             return;
-        }else if directory == "." {
+        } else if directory == "." {
             return;
-        }else if directory == "~" {
+        } else if directory == "~" {
             if let Some(home) = std::env::var_os("HOME") {
                 std::env::set_current_dir(home).unwrap_or_else(|_e| {
                     eprintln!("cd: {}: No such file or directory", directory);
                 });
             }
             return;
-        } 
+        }
         match std::env::set_current_dir(directory) {
             Ok(_) => (),
             Err(_e) => eprintln!("cd: {}: No such file or directory", directory),
         }
     }
 
-    fn r#type(command: &str, regix: &[[&str; 2]; 5]) { // change this if u changed the regix size
+    fn r#type(command: &str, regix: &[[&str; 2]; 5]) {
         if let Some(entry) = regix.iter().find(|cmd| cmd[0] == command) {
             println!("{} is a shell {}", entry[0], entry[1]);
-        }else if find_executable_in_path(command).is_some() {
+        } else if find_executable_in_path(command).is_some() {
             println!("{} is {}", command, find_executable_in_path(command).unwrap().display());
-        }else {
+        } else {
             println!("{}: not found", command);
         }
     }
@@ -86,30 +112,45 @@ fn main() {
         }
     }
 
+    fn process_command(command: &str) {
+        let regix: &[[&str; 2]; 5] = &[
+            ["echo", "builtin"],
+            ["type", "builtin"],
+            ["exit", "builtin"],
+            ["pwd", "builtin"],
+            ["cd", "builtin"],
+        ];
+
+        let tokens = parse_args(command);
+        if tokens.is_empty() {
+            return;
+        }
+
+        let cmd = tokens[0].as_str();
+        let args_vec: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
+        let args_joined = args_vec.join(" ");
+
+        match cmd {
+            "exit" => return,
+            "echo" => echo(&args_vec),
+            "type" => r#type(&args_joined, regix),
+            "pwd" => pwd(),
+            "cd" => cd(&args_joined),
+            _ => execute(cmd, &args_vec),
+        }
+    }
+
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
         io::stdin().read_line(&mut command).unwrap();
-        let mut parts = command.trim().split_whitespace();
-        let cmd = parts.next().unwrap_or("");
-        let args: Vec<&str> = parts.clone().collect();
-        let mut content = parts.collect::<Vec<_>>().join(" ");
-        
-        if cmd.is_empty() {
+
+        if command.is_empty() {
             command.clear();
             continue;
         }
-        
-        match cmd {
-            "exit" => break,
-            "echo" => echo(&content),
-            "type" => r#type(&content, regix),
-            "pwd" => pwd(),
-            "cd" => cd(&content),
-            _ => execute(cmd, &args),
-        }
 
+        process_command(&command);
         command.clear();
-        content.clear();
     }
 }
