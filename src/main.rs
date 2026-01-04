@@ -16,8 +16,21 @@ fn main() {
         let mut cur = String::new();
         let mut in_sq = false;
         let mut in_dq = false;
+        let mut escape = false;
 
         for c in s.chars() {
+            if escape {
+                // backslash makes next char literal
+                cur.push(c);
+                escape = false;
+                continue;
+            }
+
+            if c == '\\' {
+                escape = true;
+                continue;
+            }
+
             if c == '\'' && !in_dq {
                 in_sq = !in_sq;
                 continue;
@@ -35,6 +48,11 @@ fn main() {
             } else {
                 cur.push(c);
             }
+        }
+
+        if escape {
+            // trailing backslash: treat it as a literal backslash
+            cur.push('\\');
         }
 
         if !cur.is_empty() {
