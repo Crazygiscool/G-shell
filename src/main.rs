@@ -7,89 +7,76 @@ use std::process::Command;
 fn main() {
     let mut command: String = String::new();
 
-    // Parse arguments supporting single and double quotes:
-    // - whitespace separates words (consecutive whitespace collapsed)
-    // - single or double quotes preserve spaces and characters literally
-    // - adjacent quoted/ unquoted parts without intervening whitespace are concatenated
     fn tokenize(input: &str) -> Vec<String> {
         let mut tokens = Vec::new();
         let mut cur = String::new();
 
         let mut chars = input.chars().peekable();
-
         let mut in_single = false;
         let mut in_double = false;
 
         while let Some(c) = chars.next() {
             match c {
-                // -------------------------
                 // SINGLE QUOTES
-                // -------------------------
                 '\'' if !in_double => {
                     in_single = !in_single;
                 }
 
-                // -------------------------
                 // DOUBLE QUOTES
-                // -------------------------
                 '"' if !in_single => {
                     in_double = !in_double;
                 }
 
-                // -------------------------
                 // BACKSLASH HANDLING
-                // -------------------------
                 '\\' => {
                     if in_single {
-                        // literal backslash inside single quotes
                         cur.push('\\');
                     } else if in_double {
-                        // only \" and \\ are special
-                        match chars.peek() {
-                            Some('"') => {
-                                chars.next();
-                                cur.push('"');
-                            }
-                            Some('\\') => {
-                                chars.next();
+                        match chars.next() {
+                            Some('"') => cur.push('"'),
+                            Some('\\') => cur.push('\\'),
+                            Some('\n') => { /* line continuation */ }
+                            Some(ch) => {
                                 cur.push('\\');
-                            }
-                            Some('\n') => {
-                                chars.next(); // remove newline
-                            }
-                            Some(_) => {
-                                // literal backslash + char
-                                cur.push('\\');
-                                cur.push(chars.next().unwrap());
+                                cur.push(ch);
                             }
                             None => cur.push('\\'),
                         }
                     } else {
-                        // outside quotes
-                        match chars.peek() {
-                            Some('\n') => {
-                                chars.next(); // remove newline
-                            }
-                            Some(_) => {
-                                cur.push(chars.next().unwrap());
-                            }
+                        match chars.next() {
+                            Some('\n') => { /* line continuation */ }
+                            Some(ch) => cur.push(ch),
                             None => cur.push('\\'),
                         }
                     }
                 }
 
-                // -------------------------
                 // WHITESPACE SPLITTING
-                // -------------------------
                 c if c.is_whitespace() && !in_single && !in_double => {
                     if !cur.is_empty() {
                         tokens.push(cur);
                         cur = String::new();
                     }
                 }
-                // -------------------------
-                // REDIRECTION OPERATOR
-                // -------------------------
+
+                // FD REDIRECTION (e.g., 1>, 2>)
+                c if !in_single && !in_double && c.is_ascii_digit() => {
+                    if let Some('>') = chars.peek().copied() {
+                        chars.next(); // consume '>'
+                        if !cur.is_empty() {
+                            tokens.push(cur.clone());
+                            cur.clear();
+                        }
+                        let mut op = String::new();
+                        op.push(c);
+                        op.push('>');
+                        tokens.push(op);
+                    } else {
+                        cur.push(c);
+                    }
+                }
+
+                // PLAIN REDIRECTION OPERATOR ">"
                 '>' if !in_single && !in_double => {
                     if !cur.is_empty() {
                         tokens.push(cur.clone());
@@ -98,9 +85,7 @@ fn main() {
                     tokens.push(">".to_string());
                 }
 
-                // -------------------------
                 // NORMAL CHARACTER
-                // -------------------------
                 _ => cur.push(c),
             }
         }
@@ -157,37 +142,34 @@ fn main() {
     fn r#type(command: &str, regix: &[[&str; 2]; 5]) {
         if let Some(entry) = regix.iter().find(|cmd| cmd[0] == command) {
             println!("{} is a shell {}", entry[0], entry[1]);
-        } else if find_executable_in_path(command).is_some() {
-            println!("{} is {}", command, find_executable_in_path(command).unwrap().display());
+        } else if let Some(path) = find_executable_in_path(command) {
+            println!("{} is {}", command, path.display());
         } else {
             println!("{}: not found", command);
         }
     }
 
-    fn execute(cmd: &str, args: &[&str], redirect: Option<&str>) {
+    fn execute(cmd: &str, args: &[&str], redirect: Option<(&str, i32)>) {
         if let Some(path) = find_executable_in_path(cmd) {
             let mut child = Command::new(&path);
 
-            // Correct argv[0]
             child.arg0(cmd);
-
-            // Normal arguments
             child.args(args);
 
-            // Optional stdout redirection
-            if let Some(filename) = redirect {
-                match File::create(filename) {
-                    Ok(file) => {
-                        child.stdout(file);
-                    }
-                    Err(e) => {
-                        eprintln!("{}: {}", filename, e);
-                        return;
+            if let Some((filename, fd)) = redirect {
+                if fd == 1 {
+                    match File::create(filename) {
+                        Ok(file) => {
+                            child.stdout(file);
+                        }
+                        Err(e) => {
+                            eprintln!("{}: {}", filename, e);
+                            return;
+                        }
                     }
                 }
             }
 
-            // Run the command
             match child.status() {
                 Ok(status) => {
                     if !status.success() {
@@ -201,17 +183,6 @@ fn main() {
         } else {
             eprintln!("{}: command not found", cmd);
         }
-    }
-
-    fn redirect_option(tokens: &[String]) -> Option<String> {
-        if let Some(i) = tokens.iter().position(|t| t == ">") {
-            if i + 1 >= tokens.len() {
-                eprintln!("syntax error: expected filename after '>'");
-                return None;
-            }
-            return Some(tokens[i + 1].clone());
-        }
-        None
     }
 
     fn process_command(command: &str) {
@@ -228,29 +199,35 @@ fn main() {
             return;
         }
 
-        // -------------------------
-        // Handle redirection
-        // -------------------------
-        let mut redirect: Option<String> = None;
+        // Handle redirection: ">", "1>", "2>", etc. (we only honor fd 1)
+        let mut redirect: Option<(String, i32)> = None;
 
-        if let Some(i) = tokens.iter().position(|t| t == ">") {
+        if let Some(i) = tokens.iter().position(|t| t == ">" || (t.ends_with('>') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))) {
             if i + 1 >= tokens.len() {
-                eprintln!("syntax error: expected filename after '>'");
+                eprintln!("syntax error: expected filename after redirection");
                 return;
             }
 
-            redirect = Some(tokens[i + 1].clone());
+            let op = tokens[i].clone();
+            let fd = if op == ">" {
+                1
+            } else {
+                op[..op.len() - 1].parse::<i32>().unwrap_or(1)
+            };
 
-            // Remove ">" and filename
+            let filename = tokens[i + 1].clone();
+            redirect = Some((filename, fd));
+
             tokens.drain(i..=i + 1);
         }
 
-        // -------------------------
-        // Command + args
-        // -------------------------
+        if tokens.is_empty() {
+            return;
+        }
+
         let cmd = tokens[0].as_str();
         let args_vec: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
-        
+
         match cmd {
             "exit" => std::process::exit(0),
             "echo" => echo(&args_vec),
@@ -269,14 +246,16 @@ fn main() {
                     cd("");
                 }
             }
-            _ => execute(cmd, &args_vec, redirect.as_deref()),
+            _ => execute(cmd, &args_vec, redirect.as_ref().map(|(f, fd)| (f.as_str(), *fd))),
         }
     }
 
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
-        io::stdin().read_line(&mut command).unwrap();
+        if io::stdin().read_line(&mut command).is_err() {
+            break;
+        }
 
         if command.is_empty() {
             command.clear();
