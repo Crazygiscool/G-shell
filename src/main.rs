@@ -131,7 +131,7 @@ fn main() {
         let args_joined = args_vec.join(" ");
 
         match cmd {
-            "exit" => return,
+            "exit" => std::process::exit(0),
             "echo" => echo(&args_vec),
             "type" => r#type(&args_joined, regix),
             "pwd" => pwd(),
