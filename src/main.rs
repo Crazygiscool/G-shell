@@ -175,11 +175,11 @@ fn main() {
             match child.status() {
                 Ok(status) => {
                     if !status.success() {
-                        eprintln!("Command exited with non-zero status");
+                        return;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to execute command: {}", e);
+                    return;
                 }
             }
         } else {
