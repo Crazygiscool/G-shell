@@ -23,14 +23,29 @@ fn main() {
         }
     }
 
+    fn execute(command: &str, args: &[&str]) {
+        if let Some(path) = find_executable_in_path(command) {
+            match std::process::Command::new(path).args(args).status() {
+                Ok(status) => {
+                    if !status.success() {
+                        eprintln!("Command exited with non-zero status");
+                    }
+                }
+                Err(e) => eprintln!("Failed to execute command: {}", e),
+            }
+        } else {
+            eprintln!("{}: command not found", command);
+        }
+    }
+
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
         io::stdin().read_line(&mut command).unwrap();
         let mut parts = command.trim().split_whitespace();
         let cmd = parts.next().unwrap_or("");
+        let args: Vec<&str> = parts.clone().collect();
         let mut content = parts.collect::<Vec<_>>().join(" ");
-        
         
         if cmd.is_empty() {
             command.clear();
@@ -41,7 +56,7 @@ fn main() {
             "exit" => break,
             "echo" => echo(&content),
             "type" => r#type(&content, regix),
-            _ => println!("{}: command not found", cmd),
+            _ => execute(cmd, &args),
         }
 
         command.clear();
