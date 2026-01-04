@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 use pathsearch::find_executable_in_path;
 use std::os::unix::process::CommandExt;
-
+use std::fs::File;
+use std::process::Command;
 
 fn main() {
     let mut command: String = String::new();
@@ -86,6 +87,16 @@ fn main() {
                         cur = String::new();
                     }
                 }
+                // -------------------------
+                // REDIRECTION OPERATOR
+                // -------------------------
+                '>' if !in_single && !in_double => {
+                    if !cur.is_empty() {
+                        tokens.push(cur.clone());
+                        cur.clear();
+                    }
+                    tokens.push(">".to_string());
+                }
 
                 // -------------------------
                 // NORMAL CHARACTER
@@ -153,13 +164,31 @@ fn main() {
         }
     }
 
-    fn execute(cmd: &str, args: &[&str]) {
+    fn execute(cmd: &str, args: &[&str], redirect: Option<&str>) {
         if let Some(path) = find_executable_in_path(cmd) {
-            match std::process::Command::new(path)
-                .arg0(cmd)
-                .args(args)
-                .status()
-            {
+            let mut child = Command::new(&path);
+
+            // Correct argv[0]
+            child.arg0(cmd);
+
+            // Normal arguments
+            child.args(args);
+
+            // Optional stdout redirection
+            if let Some(filename) = redirect {
+                match File::create(filename) {
+                    Ok(file) => {
+                        child.stdout(file);
+                    }
+                    Err(e) => {
+                        eprintln!("{}: {}", filename, e);
+                        return;
+                    }
+                }
+            }
+
+            // Run the command
+            match child.status() {
                 Ok(status) => {
                     if !status.success() {
                         eprintln!("Command exited with non-zero status");
@@ -174,6 +203,17 @@ fn main() {
         }
     }
 
+    fn redirect_option(tokens: &[String]) -> Option<String> {
+        if let Some(i) = tokens.iter().position(|t| t == ">") {
+            if i + 1 >= tokens.len() {
+                eprintln!("syntax error: expected filename after '>'");
+                return None;
+            }
+            return Some(tokens[i + 1].clone());
+        }
+        None
+    }
+
     fn process_command(command: &str) {
         let regix: &[[&str; 2]; 5] = &[
             ["echo", "builtin"],
@@ -183,22 +223,53 @@ fn main() {
             ["cd", "builtin"],
         ];
 
-        let tokens = tokenize(command);
+        let mut tokens = tokenize(command);
         if tokens.is_empty() {
             return;
         }
 
+        // -------------------------
+        // Handle redirection
+        // -------------------------
+        let mut redirect: Option<String> = None;
+
+        if let Some(i) = tokens.iter().position(|t| t == ">") {
+            if i + 1 >= tokens.len() {
+                eprintln!("syntax error: expected filename after '>'");
+                return;
+            }
+
+            redirect = Some(tokens[i + 1].clone());
+
+            // Remove ">" and filename
+            tokens.drain(i..=i + 1);
+        }
+
+        // -------------------------
+        // Command + args
+        // -------------------------
         let cmd = tokens[0].as_str();
         let args_vec: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
-        let args_joined = args_vec.join(" ");
-
+        
         match cmd {
             "exit" => std::process::exit(0),
             "echo" => echo(&args_vec),
-            "type" => r#type(&args_joined, regix),
+            "type" => {
+                if let Some(first) = args_vec.first() {
+                    r#type(first, regix);
+                } else {
+                    eprintln!("type: missing operand");
+                }
+            }
             "pwd" => pwd(),
-            "cd" => cd(&args_joined),
-            _ => execute(cmd, &args_vec),
+            "cd" => {
+                if let Some(first) = args_vec.first() {
+                    cd(first);
+                } else {
+                    cd("");
+                }
+            }
+            _ => execute(cmd, &args_vec, redirect.as_deref()),
         }
     }
 
