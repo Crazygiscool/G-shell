@@ -1,5 +1,7 @@
 use std::io::{self, Write};
 use pathsearch::find_executable_in_path;
+use std::os::unix::process::CommandExt;
+
 
 fn main() {
     let mut command: String = String::new();
@@ -23,18 +25,24 @@ fn main() {
         }
     }
 
-    fn execute(command: &str, args: &[&str]) {
-        if let Some(path) = find_executable_in_path(command) {
-            match std::process::Command::new(path).args(args).status() {
+    fn execute(cmd: &str, args: &[&str]) {
+        if let Some(path) = find_executable_in_path(cmd) {
+            match std::process::Command::new(path)
+                .arg0(cmd)
+                .args(args)
+                .status()
+            {
                 Ok(status) => {
                     if !status.success() {
                         eprintln!("Command exited with non-zero status");
                     }
                 }
-                Err(e) => eprintln!("Failed to execute command: {}", e),
+                Err(e) => {
+                    eprintln!("Failed to execute command: {}", e);
+                }
             }
         } else {
-            eprintln!("{}: command not found", command);
+            eprintln!("{}: command not found", cmd);
         }
     }
 
