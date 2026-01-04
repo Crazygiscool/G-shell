@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use pathsearch::find_executable_in_path;
 
 fn main() {
     let mut command: String = String::new();
@@ -15,7 +16,9 @@ fn main() {
     fn r#type(command: &str, regix: &[[&str; 2]; 3]) {
         if let Some(entry) = regix.iter().find(|cmd| cmd[0] == command) {
             println!("{} is a shell {}", entry[0], entry[1]);
-        } else {
+        }else if find_executable_in_path(command).is_some() {
+            println!("{} is {}", command, find_executable_in_path(command).unwrap().display());
+        }else {
             println!("{}: not found", command);
         }
     }

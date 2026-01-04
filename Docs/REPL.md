@@ -1,4 +1,6 @@
-A REPL (Read-Eval-Print Loop) is an interactive loop that forms the core of a shell. It follows a repeating cycle:
+# A REPL (Read-Eval-Print Loop) is an interactive loop that forms the core of a shell
+
+It follows a repeating cycle:
 
     Read: Display a prompt and wait for user input
     Eval: Parse and execute the command
