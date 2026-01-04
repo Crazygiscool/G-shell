@@ -6,23 +6,28 @@ use std::os::unix::process::CommandExt;
 fn main() {
     let mut command: String = String::new();
 
-    // Parse arguments following simple single-quote rules:
+    // Parse arguments supporting single and double quotes:
     // - whitespace separates words (consecutive whitespace collapsed)
-    // - single quotes preserve spaces and characters literally
+    // - single or double quotes preserve spaces and characters literally
     // - adjacent quoted/ unquoted parts without intervening whitespace are concatenated
     fn parse_args(input: &str) -> Vec<String> {
         let s = input.trim_end_matches(|c| c == '\n' || c == '\r');
         let mut args: Vec<String> = Vec::new();
         let mut cur = String::new();
         let mut in_sq = false;
+        let mut in_dq = false;
 
         for c in s.chars() {
-            if c == '\'' {
+            if c == '\'' && !in_dq {
                 in_sq = !in_sq;
                 continue;
             }
+            if c == '"' && !in_sq {
+                in_dq = !in_dq;
+                continue;
+            }
 
-            if c.is_whitespace() && !in_sq {
+            if c.is_whitespace() && !in_sq && !in_dq {
                 if !cur.is_empty() {
                     args.push(cur);
                     cur = String::new();
