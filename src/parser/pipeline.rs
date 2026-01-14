@@ -1,4 +1,4 @@
-use std::process::{Command, Stdio};
+use std::process::{Command, Stdio, Child};
 use std::io::Write;
 use std::env;
 use std::fs;
@@ -6,11 +6,15 @@ use std::path::{PathBuf};
 use os_pipe::pipe; 
 use crate::parser::tokenize::tokenize;
 
-pub fn execute_pipeline(line: &str) {
+// UPDATE: Added history_data parameter to match the call in main.rs
+pub fn execute_pipeline(line: &str, history_data: &[String]) {
     let segments: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
     let mut prev_stdin: Option<Stdio> = None;
     let mut children = Vec::new();
     let total = segments.len();
+
+    // UPDATE: Added "history" to the builtin list
+    let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
 
     for (i, segment) in segments.into_iter().enumerate() {
         let mut parts = tokenize(segment);
@@ -18,23 +22,23 @@ pub fn execute_pipeline(line: &str) {
         let program = parts.remove(0);
         let is_last = i == total - 1;
 
-        // 1. Handle Builtins
-        if ["echo", "cd", "pwd", "type", "exit"].contains(&program.as_str()) {
+        if builtins.contains(&program.as_str()) {
             if is_last {
-                run_builtin(&program, parts);
+                // UPDATE: Pass history_data here
+                run_builtin(&program, parts, history_data);
                 prev_stdin = None;
             } else {
                 let (reader, mut writer) = pipe().expect("Pipe failed");
-                let output = get_builtin_output(&program, parts);
+                // UPDATE: Pass history_data here
+                let output = get_builtin_output(&program, parts, history_data);
                 let _ = writer.write_all(output.as_bytes());
-                drop(writer); // Send EOF to next command
+                drop(writer); 
 
                 prev_stdin = Some(Stdio::from(reader));
             }
             continue;
         }
 
-        // 2. Handle External Commands
         let mut cmd = Command::new(program);
         cmd.args(parts);
 
@@ -70,7 +74,6 @@ pub fn execute_pipeline(line: &str) {
     }
 }
 
-/// Manual PATH search to replace the 'which' crate
 fn find_in_path(cmd: &str) -> Option<PathBuf> {
     let paths = env::var_os("PATH")?;
     for path in env::split_paths(&paths) {
@@ -82,13 +85,19 @@ fn find_in_path(cmd: &str) -> Option<PathBuf> {
     None
 }
 
-fn get_builtin_output(name: &str, args: Vec<String>) -> String {
+// UPDATE: Added history_data parameter
+fn get_builtin_output(name: &str, args: Vec<String>, history_data: &[String]) -> String {
     match name {
         "echo" => format!("{}\n", args.join(" ")),
         "pwd" => format!("{}\n", env::current_dir().unwrap_or_default().display()),
+        "history" => {
+            history_data.iter().enumerate()
+                .map(|(i, s)| format!("  {:>3}  {}\n", i + 1, s))
+                .collect::<String>()
+        },
         "type" => {
             if let Some(cmd) = args.first() {
-                let builtins = ["echo", "cd", "pwd", "type", "exit"];
+                let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
                 if builtins.contains(&cmd.as_str()) {
                     format!("{} is a shell builtin\n", cmd)
                 } else if let Some(path) = find_in_path(cmd) {
@@ -104,10 +113,11 @@ fn get_builtin_output(name: &str, args: Vec<String>) -> String {
     }
 }
 
-fn run_builtin(name: &str, args: Vec<String>) {
+// UPDATE: Added history_data parameter
+fn run_builtin(name: &str, args: Vec<String>, history_data: &[String]) {
     match name {
-        "echo" | "pwd" | "type" => {
-            print!("{}", get_builtin_output(name, args));
+        "echo" | "pwd" | "type" | "history" => {
+            print!("{}", get_builtin_output(name, args, history_data));
             let _ = std::io::stdout().flush();
         }
         "exit" => {
