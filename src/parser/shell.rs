@@ -1,13 +1,14 @@
 use rustyline::config::{BellStyle, CompletionType};
 use rustyline::{Config, Editor};
+use rustyline::history::FileHistory; // Use FileHistory instead of DefaultHistory
 use crate::parser::helper::ShellHelper;
 use crate::parser::{pipeline, tokenize::tokenize};
-use crate::commands::history::{history, HistoryAction}; // Added HistoryAction
+use crate::commands::history::{history, HistoryAction};
 use crate::parser::process::process_command;
-use std::fs;
 
 pub struct Shell {
-    rl: Editor<ShellHelper>,
+    // FIX: Specify FileHistory as the second generic
+    rl: Editor<ShellHelper, FileHistory>,
 }
 
 impl Shell {
@@ -17,8 +18,11 @@ impl Shell {
             .bell_style(BellStyle::Audible)
             .build();
         
-        let mut rl = Editor::<ShellHelper>::with_config(config)?;
+        // FIX: with_config still takes only the config object.
+        // The generics on Editor determine the types.
+        let mut rl = Editor::<ShellHelper, FileHistory>::with_config(config)?;
         rl.set_helper(Some(ShellHelper));
+        
         let _ = rl.load_history(".shell_history");
         
         Ok(Shell { rl })
@@ -33,10 +37,10 @@ impl Shell {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    // 1. Add current command to history
-                    let _ = self.rl.add_history_entry(trimmed);
+                    // FIX: In 2026, add_history_entry returns Result<bool>.
+                    // Use ? to propagate the error or handle it.
+                    self.rl.add_history_entry(trimmed)?;
 
-                    // 2. Prepare history vector for modules
                     let history_vec: Vec<String> = self.rl.history()
                         .iter()
                         .map(|s| s.to_string())
@@ -47,27 +51,21 @@ impl Shell {
                     
                     let command = tokens.remove(0);
 
-                    // 3. Routing
                     if trimmed.contains('|') {
                         pipeline::execute_pipeline(trimmed, &history_vec);
                     } else if command == "history" {
-                        // Capture the action (None or Load)
-                        let action = history(&history_vec, &tokens);
-
-                        // Handle 'history -r' request
-                        if let HistoryAction::Load(path) = action {
-                            match fs::read_to_string(&path) {
-                                Ok(content) => {
-                                    for line in content.lines() {
-                                        let line_trimmed = line.trim();
-                                        if !line_trimmed.is_empty() {
-                                            // Append file history to current session
-                                            let _ = self.rl.add_history_entry(line_trimmed);
-                                        }
-                                    }
+                        match history(&history_vec, &tokens) {
+                            HistoryAction::Load(path) => {
+                                if let Err(_) = self.rl.load_history(&path) {
+                                    eprintln!("history: {}: No such file or directory", path);
                                 }
-                                Err(_) => eprintln!("history: {}: No such file or directory", path),
                             }
+                            HistoryAction::Write(path) => {
+                                if let Err(e) = self.rl.save_history(&path) {
+                                    eprintln!("history: failed to write {}: {}", path, e);
+                                }
+                            }
+                            HistoryAction::None => {}
                         }
                     } else {
                         process_command(trimmed);

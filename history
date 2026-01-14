@@ -1,3 +1,8 @@
+#V2
+clear
+echo how are you
+history -r history
 echo hello
 echo world
 <|EMPTY LINE|>
+history -w history

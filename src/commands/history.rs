@@ -1,14 +1,20 @@
 pub enum HistoryAction {
     Load(String),
+    Write(String), // New action for writing history
     None,
 }
 
 pub fn history(entries: &[String], args: &[String]) -> HistoryAction {
-    // 1. Detect the -r flag (e.g., history -r my_file.txt)
-    // We check if "-r" exists and if there is a filename following it
+    // 1. Detect flags: check both -r (load) and -w (write)
     if let Some(pos) = args.iter().position(|arg| arg == "-r") {
         if let Some(path) = args.get(pos + 1) {
             return HistoryAction::Load(path.clone());
+        }
+    }
+    
+    if let Some(pos) = args.iter().position(|arg| arg == "-w") {
+        if let Some(path) = args.get(pos + 1) {
+            return HistoryAction::Write(path.clone());
         }
     }
 
