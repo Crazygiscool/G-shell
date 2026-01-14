@@ -15,15 +15,14 @@ fn main() -> rustyline::Result<()> {
         .bell_style(BellStyle::Audible)
         .build();
 
-    // 2. Supply ONLY ONE argument (config) to with_config.
-    // The Editor struct requires two generic types: Editor<Helper, History>.
-    // Use the wildcard '_' to let the compiler infer the default history type.
+    // FIX: Supply exactly ONE generic argument (the Helper). 
+    // Supply exactly ONE argument (config) to with_config.
     let mut rl = Editor::<ShellHelper>::with_config(config)?;
 
-    // 3. Set the helper separately after initialization
+    // 2. Set the helper separately after initialization
     rl.set_helper(Some(ShellHelper));
 
-    // 4. Load history separately (not as a constructor argument)
+    // 3. Load history separately (not as a constructor argument)
     let _ = rl.load_history(".shell_history");
 
     loop {
@@ -33,19 +32,22 @@ fn main() -> rustyline::Result<()> {
                 let trimmed = buffer.trim();
                 if trimmed.is_empty() { continue; }
 
-                // Collect current history for builtins
+                // FIX FOR CODECRAFTERS: Add the current command to history FIRST.
+                // This ensures the current command (e.g., "history") appears in its own output.
+                let _ = rl.add_history_entry(trimmed);
+
+                // 4. Collect current history for builtins AFTER adding the current line.
                 let history_vec: Vec<String> = rl.history()
                     .iter()
                     .map(|s| s.to_string())
                     .collect();
 
-                // add_history_entry returns Result<bool> in 2026
-                let _ = rl.add_history_entry(trimmed);
-
-                // Execution routing
+                // 5. Execution routing
                 if trimmed.contains('|') {
+                    // Pipeline logic handles history redirection
                     pipeline::execute_pipeline(trimmed, &history_vec);
                 } else if trimmed == "history" {
+                    // Direct builtin call including the self-entry
                     history(&history_vec);
                 } else {
                     process_command(trimmed);
