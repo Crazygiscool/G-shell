@@ -10,12 +10,13 @@ use crate::commands::r#type::r#type;
 use crate::commands::execute::execute;
 
 pub fn process_command(command: &str) {
-        let regix: &[[&str; 2]; 5] = &[
+        let regix: &[[&str; 2]; 6] = &[
             ["echo", "builtin"],
             ["type", "builtin"],
             ["exit", "builtin"],
             ["pwd", "builtin"],
             ["cd", "builtin"],
+            ["history", "builtin"],
         ];
 
         let mut tokens = tokenize(command);

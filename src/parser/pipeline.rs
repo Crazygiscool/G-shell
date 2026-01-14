@@ -1,4 +1,4 @@
-use std::process::{Command, Stdio, Child};
+use std::process::{Command, Stdio};
 use std::io::Write;
 use std::env;
 use std::fs;
