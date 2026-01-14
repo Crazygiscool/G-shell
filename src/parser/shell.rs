@@ -1,13 +1,14 @@
 use rustyline::config::{BellStyle, CompletionType};
 use rustyline::{Config, Editor};
-use rustyline::history::FileHistory; // Use FileHistory instead of DefaultHistory
+use rustyline::history::FileHistory;
 use crate::parser::helper::ShellHelper;
 use crate::parser::{pipeline, tokenize::tokenize};
 use crate::commands::history::{history, HistoryAction};
 use crate::parser::process::process_command;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 
 pub struct Shell {
-    // FIX: Specify FileHistory as the second generic
     rl: Editor<ShellHelper, FileHistory>,
 }
 
@@ -18,11 +19,10 @@ impl Shell {
             .bell_style(BellStyle::Audible)
             .build();
         
-        // FIX: with_config still takes only the config object.
-        // The generics on Editor determine the types.
         let mut rl = Editor::<ShellHelper, FileHistory>::with_config(config)?;
         rl.set_helper(Some(ShellHelper));
         
+        // Rustyline can still load plain text files with load_history
         let _ = rl.load_history(".shell_history");
         
         Ok(Shell { rl })
@@ -37,8 +37,7 @@ impl Shell {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    // FIX: In 2026, add_history_entry returns Result<bool>.
-                    // Use ? to propagate the error or handle it.
+                    // Add to in-memory history
                     self.rl.add_history_entry(trimmed)?;
 
                     let history_vec: Vec<String> = self.rl.history()
@@ -61,9 +60,8 @@ impl Shell {
                                 }
                             }
                             HistoryAction::Write(path) => {
-                                if let Err(e) = self.rl.save_history(&path) {
-                                    eprintln!("history: failed to write {}: {}", path, e);
-                                }
+                                // Manual write for "history -w" to avoid #v2
+                                let _ = self.save_history_plain(&path);
                             }
                             HistoryAction::None => {}
                         }
@@ -74,7 +72,19 @@ impl Shell {
                 Err(_) => break, 
             }
         }
-        let _ = self.rl.save_history(".shell_history");
+        // Save the default history file as plain text on exit
+        let _ = self.save_history_plain(".shell_history");
+        Ok(())
+    }
+
+    /// Helper to save history as plain text without the #v2 metadata header
+    fn save_history_plain(&self, path: &str) -> std::io::Result<()> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        for entry in self.rl.history().iter() {
+            writeln!(writer, "{}", entry)?;
+        }
+        writer.flush()?;
         Ok(())
     }
 }
