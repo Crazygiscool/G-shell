@@ -2,11 +2,15 @@ use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
-use rustyline::{Context, Helper};
+use rustyline::{Context, Helper, Result};
+use crate::parser::tab::{complete_command, complete_path};
+use crate::parser::tokenize::tokenize;
 
 #[derive(Clone, Copy)]
 pub struct ShellHelper;
 
+// In modern Rustyline, Helper is a blanket trait. 
+// These empty impls are correct as long as the sub-traits are implemented.
 impl Helper for ShellHelper {}
 
 impl Hinter for ShellHelper {
@@ -27,32 +31,44 @@ impl Completer for ShellHelper {
         line: &str,
         pos: usize,
         _ctx: &Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Pair>)> {
-        let mut buf = line[..pos].to_string();
+    ) -> Result<(usize, Vec<Pair>)> {
+        let buf = &line[..pos];
+        let tokens = tokenize(buf);
         
-        // Use the tokenize logic to find where the "last word" starts
-        // This prevents the tab completion from overwriting the whole line
-        let tokens = crate::parser::tokenize::tokenize(&buf);
-        let last_word = tokens.last().map(|s| s.as_str()).unwrap_or("");
-        
-        // Calculate the starting position of the last word
-        let start_pos = buf.rfind(last_word).unwrap_or(pos);
-
-        // Run your tab completion logic
-        crate::parser::tab::tab(&mut buf);
-
-        if buf == line[..pos] {
-            return Ok((pos, Vec::new()));
-        }
-
-        // The 'replacement' should now be the full completed word
-        // found by your tab logic.
-        let candidate = Pair {
-            display: buf[start_pos..].to_string(),
-            replacement: buf[start_pos..].to_string(),
+        // 1. Identify the word fragment being completed
+        // If buffer ends in space, we are starting a new argument (empty string)
+        let last_word = if buf.ends_with(' ') || tokens.is_empty() {
+            ""
+        } else {
+            tokens.last().map(|s| s.as_str()).unwrap_or("")
         };
 
-        // Return the start_pos so Rustyline only replaces the word, not the whole line
-        Ok((start_pos, vec![candidate]))
+        // 2. Determine the buffer index where the replacement should start
+        let start_pos = if last_word.is_empty() {
+            pos
+        } else {
+            // Find the last occurrence of the fragment to replace it
+            buf.rfind(last_word).unwrap_or(pos)
+        };
+
+        // 3. Fetch all matches from your tab logic
+        // If it's the first token (and no trailing space), it's a command
+        let matches = if tokens.len() <= 1 && !buf.ends_with(' ') {
+            complete_command(last_word)
+        } else {
+            // Otherwise, it's a file path
+            complete_path(last_word)
+        };
+
+        // 4. Convert Strings to Rustyline Candidate Pairs
+        let candidates: Vec<Pair> = matches
+            .into_iter()
+            .map(|m| Pair {
+                display: m.clone(),
+                replacement: m,
+            })
+            .collect();
+
+        Ok((start_pos, candidates))
     }
 }
