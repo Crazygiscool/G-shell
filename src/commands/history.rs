@@ -7,7 +7,6 @@ pub enum HistoryAction {
 
 pub fn history(entries: &[String], args: &[String]) -> HistoryAction {
     // 1. Detect flags: -r (load), -w (write), and -a (append)
-    // We check for the flag and ensure there is an argument following it to use as a path.
     if let Some(pos) = args.iter().position(|arg| arg == "-r") {
         if let Some(path) = args.get(pos + 1) {
             return HistoryAction::Load(path.clone());
@@ -35,27 +34,20 @@ pub fn history(entries: &[String], args: &[String]) -> HistoryAction {
         }
     }
 
-    // 2. Normal history listing logic (e.g., "history" or "history 5")
-    // Parse the first argument if it's a number; otherwise, show the full list.
+    // 2. Normal history listing logic
     let n = args.first()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(entries.len());
 
-    // Calculate the window of entries to display
     let start_index = entries.len().saturating_sub(n);
     let display_subset = &entries[start_index..];
     
-    // Calculate dynamic padding based on the total history size
-    let width = entries.len().to_string().len();
-
+    // FIX FOR CODECRAFTERS: Use fixed width of 5 for the index.
+    // Standard bash uses a 5-character wide column for indices up to 99999.
+    // This results in the exact spacing required: "    8  echo apple mango"
     for (i, entry) in display_subset.iter().enumerate() {
-        // Use the absolute index (position in full history) for the display number
-        println!(
-            "  {:>width$}  {}", 
-            i + start_index + 1, 
-            entry, 
-            width = width
-        );
+        let display_num = i + start_index + 1;
+        println!("{:>5}  {}", display_num, entry);
     }
 
     HistoryAction::None
