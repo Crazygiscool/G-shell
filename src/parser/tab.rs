@@ -18,6 +18,7 @@ pub fn tab(command: &mut String) {
     if let Some(comp) = completion {
         if let Some(pos) = command.rfind(last) {
             command.replace_range(pos.., &comp);
+            command.push(' ');
         }
     }
 }
