@@ -52,7 +52,7 @@ impl Shell {
         result
     }
 
-    fn run_loop(&mut self) -> rustyline::Result<()> {
+fn run_loop(&mut self) -> rustyline::Result<()> {
         loop {
             let readline = self.rl.readline("$ ");
             
@@ -61,10 +61,16 @@ impl Shell {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    // Add current command to memory
+                    // 1. CRITICAL FIX: Handle 'exit' explicitly to allow graceful shutdown
+                    // This ensures the loop breaks and hits the save_history_plain call.
+                    if trimmed == "exit" {
+                        break;
+                    }
+
+                    // 2. Add current command to memory
                     let _ = self.rl.add_history_entry(trimmed);
 
-                    // Sync to a Vec for listing (includes the current command)
+                    // Sync to a Vec for listing
                     let history_vec: Vec<String> = self.rl.history()
                         .iter()
                         .map(|s| s.to_string())
@@ -76,20 +82,17 @@ impl Shell {
 
                     // --- Routing ---
                     if command == "history" {
-                        // Pass current history, tokens, and default HISTFILE path
                         match history_cmd(&history_vec, &tokens, &self.history_file) {
                             HistoryAction::Load(path) => {
                                 if let Err(_) = self.rl.load_history(&path) {
                                     eprintln!("history: {}: No such file or directory", path);
                                 }
-                                // Reset session start to avoid re-appending loaded items
                                 self.history_start_index = self.rl.history().len();
                             }
                             HistoryAction::Write(path) => {
                                 let _ = self.save_history_plain(&path, false);
                             }
                             HistoryAction::Append(path) => {
-                                // Only append lines added since the last checkpoint
                                 let _ = self.save_history_plain(&path, true);
                                 self.history_start_index = self.rl.history().len();
                             }
@@ -105,7 +108,7 @@ impl Shell {
                         process_command(trimmed);
                     }
                 }
-                // Break on Ctrl+C (Interrupted) or Ctrl+D (Eof)
+                // Ctrl+D also triggers this break, which allows saving.
                 Err(_) => break, 
             }
         }
