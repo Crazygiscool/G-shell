@@ -1,6 +1,9 @@
 use std::process::{Command, Stdio};
 use std::io::Write;
-use os_pipe::pipe; // Ensure 'os_pipe' is in Cargo.toml
+use std::env;
+use std::fs;
+use std::path::{PathBuf};
+use os_pipe::pipe; 
 use crate::parser::tokenize::tokenize;
 
 pub fn execute_pipeline(line: &str) {
@@ -15,28 +18,23 @@ pub fn execute_pipeline(line: &str) {
         let program = parts.remove(0);
         let is_last = i == total - 1;
 
-        // 1. Handle Builtins (e.g., echo)
+        // 1. Handle Builtins
         if ["echo", "cd", "pwd", "type", "exit"].contains(&program.as_str()) {
             if is_last {
                 run_builtin(&program, parts);
                 prev_stdin = None;
             } else {
-                // Create a manual pipe to pass builtin output to the next command
                 let (reader, mut writer) = pipe().expect("Pipe failed");
-                
-                // Get builtin output (e.g., "mango-grape\n")
                 let output = get_builtin_output(&program, parts);
                 let _ = writer.write_all(output.as_bytes());
-                
-                // Explicitly drop writer to send EOF so 'wc' knows to stop reading
-                drop(writer); 
+                drop(writer); // Send EOF to next command
 
                 prev_stdin = Some(Stdio::from(reader));
             }
             continue;
         }
 
-        // 2. Handle External Commands (e.g., wc)
+        // 2. Handle External Commands
         let mut cmd = Command::new(program);
         cmd.args(parts);
 
@@ -68,23 +66,60 @@ pub fn execute_pipeline(line: &str) {
     }
 
     for mut child in children {
-        let _ = child.wait();
+        let _ = child.wait().expect("Wait failed");
     }
+}
+
+/// Manual PATH search to replace the 'which' crate
+fn find_in_path(cmd: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    for path in env::split_paths(&paths) {
+        let full_path = path.join(cmd);
+        if fs::metadata(&full_path).map(|m| m.is_file()).unwrap_or(false) {
+            return Some(full_path);
+        }
+    }
+    None
 }
 
 fn get_builtin_output(name: &str, args: Vec<String>) -> String {
     match name {
-        "echo" => format!("{}\n", args.join(" ")), // mango-grape\n
-        "pwd" => format!("{}\n", std::env::current_dir().unwrap().display()),
+        "echo" => format!("{}\n", args.join(" ")),
+        "pwd" => format!("{}\n", env::current_dir().unwrap_or_default().display()),
+        "type" => {
+            if let Some(cmd) = args.first() {
+                let builtins = ["echo", "cd", "pwd", "type", "exit"];
+                if builtins.contains(&cmd.as_str()) {
+                    format!("{} is a shell builtin\n", cmd)
+                } else if let Some(path) = find_in_path(cmd) {
+                    format!("{} is {}\n", cmd, path.display())
+                } else {
+                    format!("{}: not found\n", cmd)
+                }
+            } else {
+                String::new()
+            }
+        },
         _ => String::new(),
     }
 }
 
 fn run_builtin(name: &str, args: Vec<String>) {
     match name {
-        "echo" => print!("{}", get_builtin_output(name, args)),
-        "exit" => std::process::exit(0),
-        "cd" => if let Some(path) = args.first() { let _ = std::env::set_current_dir(path); },
+        "echo" | "pwd" | "type" => {
+            print!("{}", get_builtin_output(name, args));
+            let _ = std::io::stdout().flush();
+        }
+        "exit" => {
+            std::process::exit(0);
+        }
+        "cd" => {
+            if let Some(path) = args.first() {
+                if let Err(e) = env::set_current_dir(path) {
+                    eprintln!("cd: {}: {}", path, e);
+                }
+            }
+        }
         _ => (),
     }
 }
