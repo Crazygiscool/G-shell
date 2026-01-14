@@ -5,11 +5,14 @@ use crate::parser::helper::ShellHelper;
 use crate::parser::{pipeline, tokenize::tokenize};
 use crate::commands::history::{history, HistoryAction};
 use crate::parser::process::process_command;
-use std::fs::{File, OpenOptions}; // Added OpenOptions
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
+use rustyline::history::History;
 
 pub struct Shell {
     rl: Editor<ShellHelper, FileHistory>,
+    // 2026 update: track the start of the current session
+    history_start_index: usize, 
 }
 
 impl Shell {
@@ -22,10 +25,13 @@ impl Shell {
         let mut rl = Editor::<ShellHelper, FileHistory>::with_config(config)?;
         rl.set_helper(Some(ShellHelper));
         
-        // Load history from file into memory
+        // Load initial history
         let _ = rl.load_history(".shell_history");
         
-        Ok(Shell { rl })
+        // Set the starting point for "new" commands in this session
+        let history_start_index = rl.history().len();
+        
+        Ok(Shell { rl, history_start_index })
     }
 
     pub fn run(&mut self) -> rustyline::Result<()> {
@@ -37,7 +43,7 @@ impl Shell {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    // Add to in-memory history (returns Result<bool> in 2026)
+                    // Add to in-memory history (self-inclusion)
                     self.rl.add_history_entry(trimmed)?;
 
                     let history_vec: Vec<String> = self.rl.history()
@@ -55,18 +61,22 @@ impl Shell {
                     } else if command == "history" {
                         match history(&history_vec, &tokens) {
                             HistoryAction::Load(path) => {
-                                // -r: Append file contents to in-memory list
                                 if let Err(_) = self.rl.load_history(&path) {
                                     eprintln!("history: {}: No such file or directory", path);
                                 }
+                                // Standard shell behavior: loading a file 
+                                // resets the "new" index to the new end of history
+                                self.history_start_index = self.rl.history().len();
                             }
                             HistoryAction::Write(path) => {
-                                // -w: Overwrite file with current in-memory list (plain text)
                                 let _ = self.save_history_plain(&path, false);
                             }
                             HistoryAction::Append(path) => {
-                                // -a: Append current in-memory list to file (plain text)
+                                // -a: Append ONLY the commands entered in this session
                                 let _ = self.save_history_plain(&path, true);
+                                // Move the index forward so the same commands 
+                                // aren't appended twice if -a is called again
+                                self.history_start_index = self.rl.history().len();
                             }
                             HistoryAction::None => {}
                         }
@@ -77,13 +87,10 @@ impl Shell {
                 Err(_) => break, 
             }
         }
-        // Save default history on exit (overwrite to keep it fresh)
         let _ = self.save_history_plain(".shell_history", false);
         Ok(())
     }
 
-    /// Helper to save history as plain text without #v2 metadata
-    /// set 'append' to true for 'history -a', false for 'history -w'
     fn save_history_plain(&self, path: &str, append: bool) -> std::io::Result<()> {
         let file = if append {
             OpenOptions::new()
@@ -95,7 +102,11 @@ impl Shell {
         };
 
         let mut writer = BufWriter::new(file);
-        for entry in self.rl.history().iter() {
+        
+        // If appending, skip everything before the current session's start index
+        let start = if append { self.history_start_index } else { 0 };
+
+        for entry in self.rl.history().iter().skip(start) {
             writeln!(writer, "{}", entry)?;
         }
         writer.flush()?;
