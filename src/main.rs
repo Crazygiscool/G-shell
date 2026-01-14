@@ -7,6 +7,7 @@ use parser::process::process_command;
 use crate::parser::helper::ShellHelper;
 use crate::parser::pipeline;
 use crate::commands::history::history;
+use crate::parser::tokenize::tokenize; // Import your tokenizer
 
 fn main() -> rustyline::Result<()> {
     // 1. Create your config
@@ -22,7 +23,7 @@ fn main() -> rustyline::Result<()> {
     // 2. Set the helper separately after initialization
     rl.set_helper(Some(ShellHelper));
 
-    // 3. Load history separately (not as a constructor argument)
+    // 3. Load history separately
     let _ = rl.load_history(".shell_history");
 
     loop {
@@ -33,31 +34,33 @@ fn main() -> rustyline::Result<()> {
                 if trimmed.is_empty() { continue; }
 
                 // FIX FOR CODECRAFTERS: Add the current command to history FIRST.
-                // This ensures the current command (e.g., "history") appears in its own output.
                 let _ = rl.add_history_entry(trimmed);
 
-                // 4. Collect current history for builtins AFTER adding the current line.
+                // 4. Collect current history for builtins AFTER adding current line.
                 let history_vec: Vec<String> = rl.history()
                     .iter()
                     .map(|s| s.to_string())
                     .collect();
 
-                // 5. Execution routing
+                // 5. Tokenize to separate the command from arguments (e.g., "history", "2")
+                let mut tokens = tokenize(trimmed);
+                if tokens.is_empty() { continue; }
+                let command = tokens.remove(0);
+
+                // 6. Execution routing
                 if trimmed.contains('|') {
-                    // Pipeline logic handles history redirection
                     pipeline::execute_pipeline(trimmed, &history_vec);
-                } else if trimmed == "history" {
-                    // Direct builtin call including the self-entry
-                    history(&history_vec);
+                } else if command == "history" {
+                    // Pass the history list and the remaining tokens (arguments)
+                    history(&history_vec, &tokens);
                 } else {
                     process_command(trimmed);
                 }
             }
-            Err(_) => break, // Exit on Ctrl+C or Ctrl+D
+            Err(_) => break, 
         }
     }
     
-    // Save history before exiting
     let _ = rl.save_history(".shell_history");
     Ok(())
 }
