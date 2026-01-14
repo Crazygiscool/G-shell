@@ -35,37 +35,44 @@ impl Completer for ShellHelper {
         let buf = &line[..pos];
         let tokens = tokenize(buf);
         
-        // 1. Identify the word fragment being completed
-        // If buffer ends in space, we are starting a new argument (empty string)
         let last_word = if buf.ends_with(' ') || tokens.is_empty() {
             ""
         } else {
             tokens.last().map(|s| s.as_str()).unwrap_or("")
         };
 
-        // 2. Determine the buffer index where the replacement should start
         let start_pos = if last_word.is_empty() {
             pos
         } else {
-            // Find the last occurrence of the fragment to replace it
             buf.rfind(last_word).unwrap_or(pos)
         };
 
-        // 3. Fetch all matches from your tab logic
-        // If it's the first token (and no trailing space), it's a command
-        let matches = if tokens.len() <= 1 && !buf.ends_with(' ') {
+        // 1. Get all matches
+        let is_command = tokens.len() <= 1 && !buf.ends_with(' ');
+        let matches = if is_command {
             complete_command(last_word)
         } else {
-            // Otherwise, it's a file path
             complete_path(last_word)
         };
 
-        // 4. Convert Strings to Rustyline Candidate Pairs
+        // 2. Map matches to Pairs and handle trailing spaces
         let candidates: Vec<Pair> = matches
             .into_iter()
-            .map(|m| Pair {
-                display: m.clone(),
-                replacement: m,
+            .map(|m| {
+                let mut replacement = m.clone();
+                
+                // UX logic for 2026:
+                // - If it's a command, add a space.
+                // - If it's a path and NOT a directory (doesn't end in /), add a space.
+                // - If it's a directory (ends in /), don't add a space so they can keep typing.
+                if is_command || !replacement.ends_with('/') {
+                    replacement.push(' ');
+                }
+
+                Pair {
+                    display: m, // Show the name without the trailing space in the list
+                    replacement, // Push the name with the space into the buffer
+                }
             })
             .collect();
 
