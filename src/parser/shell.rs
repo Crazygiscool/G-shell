@@ -52,7 +52,7 @@ impl Shell {
         result
     }
 
-fn run_loop(&mut self) -> rustyline::Result<()> {
+    fn run_loop(&mut self) -> rustyline::Result<()> {
         loop {
             let readline = self.rl.readline("$ ");
             
@@ -61,14 +61,13 @@ fn run_loop(&mut self) -> rustyline::Result<()> {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    // 1. CRITICAL FIX: Handle 'exit' explicitly to allow graceful shutdown
-                    // This ensures the loop breaks and hits the save_history_plain call.
+                    // --- FIX: Add the command to history FIRST ---
+                    let _ = self.rl.add_history_entry(trimmed);
+
+                    // Now check for exit
                     if trimmed == "exit" {
                         break;
                     }
-
-                    // 2. Add current command to memory
-                    let _ = self.rl.add_history_entry(trimmed);
 
                     // Sync to a Vec for listing
                     let history_vec: Vec<String> = self.rl.history()
@@ -108,7 +107,6 @@ fn run_loop(&mut self) -> rustyline::Result<()> {
                         process_command(trimmed);
                     }
                 }
-                // Ctrl+D also triggers this break, which allows saving.
                 Err(_) => break, 
             }
         }
