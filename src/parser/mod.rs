@@ -3,3 +3,4 @@ pub mod redirect_stdout;
 pub mod tab;
 pub mod process;
 pub mod helper;
+pub mod pipeline;
