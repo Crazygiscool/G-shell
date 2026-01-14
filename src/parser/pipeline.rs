@@ -1,39 +1,50 @@
-use std::process::{Command, Stdio, Child};
-use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+use std::io::Write;
+use os_pipe::pipe; // Ensure 'os_pipe' is in Cargo.toml
 use crate::parser::tokenize::tokenize;
 
 pub fn execute_pipeline(line: &str) {
-    let command_segments: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
-    let mut previous_stdout: Option<Stdio> = None;
-    let mut children: Vec<Child> = Vec::new();
-    let total_cmds = command_segments.len();
+    let segments: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
+    let mut prev_stdin: Option<Stdio> = None;
+    let mut children = Vec::new();
+    let total = segments.len();
 
-    let builtins = ["echo", "cd", "pwd", "type", "exit"];
-
-    for (i, segment) in command_segments.into_iter().enumerate() {
+    for (i, segment) in segments.into_iter().enumerate() {
         let mut parts = tokenize(segment);
         if parts.is_empty() { continue; }
-
         let program = parts.remove(0);
+        let is_last = i == total - 1;
 
-        // 1. Check if the command is a builtin
-        if builtins.contains(&program.as_str()) {
-            // For builtins in a pipeline, we "simulate" them by running them
-            // in the current process, but this is complex for mid-pipeline builtins.
-            // Simplified approach: run the builtin and move to next.
-            handle_builtin_in_pipeline(&program, parts, &mut previous_stdout, i == total_cmds - 1);
+        // 1. Handle Builtins (e.g., echo)
+        if ["echo", "cd", "pwd", "type", "exit"].contains(&program.as_str()) {
+            if is_last {
+                run_builtin(&program, parts);
+                prev_stdin = None;
+            } else {
+                // Create a manual pipe to pass builtin output to the next command
+                let (reader, mut writer) = pipe().expect("Pipe failed");
+                
+                // Get builtin output (e.g., "mango-grape\n")
+                let output = get_builtin_output(&program, parts);
+                let _ = writer.write_all(output.as_bytes());
+                
+                // Explicitly drop writer to send EOF so 'wc' knows to stop reading
+                drop(writer); 
+
+                prev_stdin = Some(Stdio::from(reader));
+            }
             continue;
         }
 
-        // 2. Handle External Commands
+        // 2. Handle External Commands (e.g., wc)
         let mut cmd = Command::new(program);
         cmd.args(parts);
 
-        if let Some(stdin_source) = previous_stdout.take() {
-            cmd.stdin(stdin_source);
+        if let Some(stdin) = prev_stdin.take() {
+            cmd.stdin(stdin);
         }
 
-        if i < total_cmds - 1 {
+        if !is_last {
             cmd.stdout(Stdio::piped());
         } else {
             cmd.stdout(Stdio::inherit());
@@ -41,15 +52,15 @@ pub fn execute_pipeline(line: &str) {
 
         match cmd.spawn() {
             Ok(mut child) => {
-                if i < total_cmds - 1 {
+                if !is_last {
                     if let Some(out) = child.stdout.take() {
-                        previous_stdout = Some(Stdio::from(out));
+                        prev_stdin = Some(Stdio::from(out));
                     }
                 }
                 children.push(child);
             }
             Err(e) => {
-                eprintln!("Pipeline error: {}", e);
+                eprintln!("Execution error: {}", e);
                 for mut c in children { let _ = c.kill(); }
                 return;
             }
@@ -61,27 +72,19 @@ pub fn execute_pipeline(line: &str) {
     }
 }
 
-/// Specialized handler for builtins occurring inside a pipeline
-fn handle_builtin_in_pipeline(name: &str, args: Vec<String>, prev_out: &mut Option<Stdio>, is_last: bool) {
-    // Note: To fully support builtins like `type` receiving piped input,
-    // you would need to read from `prev_out` and write to a new pipe.
-    // This is a basic implementation that just runs the builtin.
+fn get_builtin_output(name: &str, args: Vec<String>) -> String {
     match name {
-        "type" => {
-            // Logic for 'type' usually describes a command
-            if let Some(cmd_to_check) = args.first() {
-                let res = format!("{} is a shell builtin\n", cmd_to_check);
-                if is_last {
-                    print!("{}", res);
-                } else {
-                    // Create a dummy pipe to pass this output forward
-                    // (Advanced: Requires manual pipe creation via libc or nix)
-                }
-            }
-        }
-        "exit" => std::process::exit(0),
-        _ => { /* Handle other builtins */ }
+        "echo" => format!("{}\n", args.join(" ")), // mango-grape\n
+        "pwd" => format!("{}\n", std::env::current_dir().unwrap().display()),
+        _ => String::new(),
     }
-    // Clear previous output as it was "consumed" or ignored by the builtin
-    *prev_out = None; 
+}
+
+fn run_builtin(name: &str, args: Vec<String>) {
+    match name {
+        "echo" => print!("{}", get_builtin_output(name, args)),
+        "exit" => std::process::exit(0),
+        "cd" => if let Some(path) = args.first() { let _ = std::env::set_current_dir(path); },
+        _ => (),
+    }
 }

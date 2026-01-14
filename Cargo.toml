@@ -12,3 +12,4 @@ libc = "0.2.179"
 pathsearch = "0.2.0"
 thiserror = "1.0.38"                             # error handling
 rustyline = "10.0.0"
+os_pipe = "1.2.3"
