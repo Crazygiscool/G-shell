@@ -8,3 +8,6 @@ echo hello
 echo world
 <|EMPTY LINE|>
 history -w history
+MAINECRAFT
+history
+history -a history

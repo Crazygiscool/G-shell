@@ -5,7 +5,7 @@ use crate::parser::helper::ShellHelper;
 use crate::parser::{pipeline, tokenize::tokenize};
 use crate::commands::history::{history, HistoryAction};
 use crate::parser::process::process_command;
-use std::fs::File;
+use std::fs::{File, OpenOptions}; // Added OpenOptions
 use std::io::{BufWriter, Write};
 
 pub struct Shell {
@@ -22,7 +22,7 @@ impl Shell {
         let mut rl = Editor::<ShellHelper, FileHistory>::with_config(config)?;
         rl.set_helper(Some(ShellHelper));
         
-        // Rustyline can still load plain text files with load_history
+        // Load history from file into memory
         let _ = rl.load_history(".shell_history");
         
         Ok(Shell { rl })
@@ -37,7 +37,7 @@ impl Shell {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    // Add to in-memory history
+                    // Add to in-memory history (returns Result<bool> in 2026)
                     self.rl.add_history_entry(trimmed)?;
 
                     let history_vec: Vec<String> = self.rl.history()
@@ -55,13 +55,18 @@ impl Shell {
                     } else if command == "history" {
                         match history(&history_vec, &tokens) {
                             HistoryAction::Load(path) => {
+                                // -r: Append file contents to in-memory list
                                 if let Err(_) = self.rl.load_history(&path) {
                                     eprintln!("history: {}: No such file or directory", path);
                                 }
                             }
                             HistoryAction::Write(path) => {
-                                // Manual write for "history -w" to avoid #v2
-                                let _ = self.save_history_plain(&path);
+                                // -w: Overwrite file with current in-memory list (plain text)
+                                let _ = self.save_history_plain(&path, false);
+                            }
+                            HistoryAction::Append(path) => {
+                                // -a: Append current in-memory list to file (plain text)
+                                let _ = self.save_history_plain(&path, true);
                             }
                             HistoryAction::None => {}
                         }
@@ -72,14 +77,23 @@ impl Shell {
                 Err(_) => break, 
             }
         }
-        // Save the default history file as plain text on exit
-        let _ = self.save_history_plain(".shell_history");
+        // Save default history on exit (overwrite to keep it fresh)
+        let _ = self.save_history_plain(".shell_history", false);
         Ok(())
     }
 
-    /// Helper to save history as plain text without the #v2 metadata header
-    fn save_history_plain(&self, path: &str) -> std::io::Result<()> {
-        let file = File::create(path)?;
+    /// Helper to save history as plain text without #v2 metadata
+    /// set 'append' to true for 'history -a', false for 'history -w'
+    fn save_history_plain(&self, path: &str, append: bool) -> std::io::Result<()> {
+        let file = if append {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?
+        } else {
+            File::create(path)?
+        };
+
         let mut writer = BufWriter::new(file);
         for entry in self.rl.history().iter() {
             writeln!(writer, "{}", entry)?;

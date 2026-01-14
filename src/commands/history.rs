@@ -1,11 +1,12 @@
 pub enum HistoryAction {
     Load(String),
-    Write(String), // New action for writing history
+    Write(String),
+    Append(String), // New variant for appending
     None,
 }
 
 pub fn history(entries: &[String], args: &[String]) -> HistoryAction {
-    // 1. Detect flags: check both -r (load) and -w (write)
+    // Detect flags: -r (load), -w (write), and -a (append)
     if let Some(pos) = args.iter().position(|arg| arg == "-r") {
         if let Some(path) = args.get(pos + 1) {
             return HistoryAction::Load(path.clone());
@@ -18,7 +19,13 @@ pub fn history(entries: &[String], args: &[String]) -> HistoryAction {
         }
     }
 
-    // 2. Normal history listing logic
+    if let Some(pos) = args.iter().position(|arg| arg == "-a") {
+        if let Some(path) = args.get(pos + 1) {
+            return HistoryAction::Append(path.clone());
+        }
+    }
+
+    // Normal history listing logic
     let n = args.first()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(entries.len());
