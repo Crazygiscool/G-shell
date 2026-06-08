@@ -42,19 +42,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codecrafters-shell"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "libc",
- "os_pipe",
- "pathsearch",
- "rustyline",
- "thiserror",
-]
-
-[[package]]
 name = "endian-type"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -85,6 +72,19 @@ dependencies = [
  "cfg-if",
  "rustix",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "g-shell"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "libc",
+ "os_pipe",
+ "pathsearch",
+ "rustyline",
+ "thiserror",
 ]
 
 [[package]]
