@@ -2,11 +2,12 @@ use std::process::{Command, Stdio};
 use std::io::Write;
 use std::env;
 use std::fs;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use os_pipe::pipe;
 use crate::parser::tokenize::tokenize;
+use crate::parser::expand::expand_tokens;
 
-pub fn execute_pipeline(line: &str, history_data: &[String]) -> i32 {
+pub fn execute_pipeline(line: &str, history_data: &[String], last_exit_code: i32) -> i32 {
     let segments: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
     let mut prev_stdin: Option<Stdio> = None;
     let mut children = Vec::new();
@@ -15,29 +16,40 @@ pub fn execute_pipeline(line: &str, history_data: &[String]) -> i32 {
     let mut exit_code = 0;
 
     for (i, segment) in segments.into_iter().enumerate() {
-        let mut parts = tokenize(segment);
-        if parts.is_empty() { continue; }
+        let raw_parts = tokenize(segment);
+        if raw_parts.is_empty() { continue; }
 
-        // Extract input redirect: look for "<" or "N<"
+        let parts = expand_tokens(&raw_parts, last_exit_code);
+
         let mut stdin_file: Option<String> = None;
-        if let Some(pos) = parts.iter().position(|t| t == "<" || (t.ends_with('<') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))) {
-            if pos + 1 < parts.len() {
-                stdin_file = Some(parts[pos + 1].clone());
-                parts.drain(pos..=pos + 1);
+        let mut final_parts: Vec<String> = Vec::new();
+        let mut j = 0;
+        while j < parts.len() {
+            let op = &parts[j];
+            if op == "<" || (op.ends_with('<') && op[..op.len()-1].chars().all(|c| c.is_ascii_digit())) {
+                if j + 1 < parts.len() {
+                    stdin_file = Some(parts[j + 1].clone());
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            } else {
+                final_parts.push(parts[j].clone());
+                j += 1;
             }
         }
 
-        if parts.is_empty() { continue; }
-        let program = parts.remove(0);
+        if final_parts.is_empty() { continue; }
+        let program = final_parts.remove(0);
         let is_last = i == total - 1;
 
         if builtins.contains(&program.as_str()) {
             if is_last {
-                run_builtin(&program, parts, history_data);
+                run_builtin(&program, final_parts, history_data);
                 prev_stdin = None;
             } else {
                 let (reader, mut writer) = pipe().expect("Pipe failed");
-                let output = get_builtin_output(&program, parts, history_data);
+                let output = get_builtin_output(&program, final_parts, history_data);
                 let _ = writer.write_all(output.as_bytes());
                 drop(writer);
                 prev_stdin = Some(Stdio::from(reader));
@@ -46,7 +58,7 @@ pub fn execute_pipeline(line: &str, history_data: &[String]) -> i32 {
         }
 
         let mut cmd = Command::new(&program);
-        cmd.args(&parts);
+        cmd.args(&final_parts);
 
         if let Some(file) = stdin_file {
             if let Ok(f) = fs::File::open(&file) {

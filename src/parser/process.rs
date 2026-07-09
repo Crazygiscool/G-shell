@@ -1,6 +1,7 @@
 use std::os::unix::io::RawFd;
 
 use crate::parser::tokenize::tokenize;
+use crate::parser::expand::expand_tokens;
 use crate::parser::redirect_stdout::{
     redirect_stdout_to, redirect_stdout_append,
     redirect_stderr_to, redirect_stderr_append,
@@ -13,7 +14,7 @@ use crate::commands::pwd::pwd;
 use crate::commands::r#type::r#type;
 use crate::commands::execute::execute;
 
-pub fn process_command(command: &str) -> i32 {
+pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
         let registry: &[[&str; 2]; 6] = &[
             ["echo", "builtin"],
             ["type", "builtin"],
@@ -23,56 +24,42 @@ pub fn process_command(command: &str) -> i32 {
             ["history", "builtin"],
         ];
 
-        let mut tokens = tokenize(command);
-        if tokens.is_empty() {
+        let raw_tokens = tokenize(command);
+        if raw_tokens.is_empty() {
             return 0;
         }
 
-        // Handle redirection: ">", ">>", "<", "1>", "1>>", "2>", "2>>", etc.
+        let tokens = expand_tokens(&raw_tokens, last_exit_code);
+
         let mut redirects: Vec<(String, String, i32)> = Vec::new();
+        let mut remaining: Vec<String> = Vec::new();
 
-        loop {
-            let pos = tokens.iter().position(|t| {
-                t == ">" || t == ">>" || t == "<"
-                || (t.ends_with('>') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))
-                || (t.ends_with(">>") && t[..t.len()-2].chars().all(|c| c.is_ascii_digit()))
-                || (t.ends_with('<') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))
-            });
-
-            match pos {
-                None => break,
-                Some(i) => {
-                    if i + 1 >= tokens.len() {
-                        eprintln!("syntax error: expected filename after redirection");
-                        return 1;
-                    }
-
-                    let op = tokens[i].clone();
-                    let filename = tokens[i + 1].clone();
-
-                    let fd = if op == ">" || op == ">>" || op == "<" {
-                        if op == "<" { 0 } else { 1 }
-                    } else {
-                        let num_part = if op.ends_with(">>") {
-                            &op[..op.len()-2]
-                        } else {
-                            &op[..op.len()-1]
-                        };
-                        num_part.parse::<i32>().unwrap_or(if op.contains('<') { 0 } else { 1 })
-                    };
-
-                    redirects.push((op, filename, fd));
-                    tokens.drain(i..=i + 1);
+        let mut i = 0;
+        while i < tokens.len() {
+            let op = &tokens[i];
+            if op == ">" || op == ">>" || op == "<"
+                || (op.ends_with('>') && op[..op.len()-1].chars().all(|c| c.is_ascii_digit()))
+                || (op.ends_with(">>") && op[..op.len()-2].chars().all(|c| c.is_ascii_digit()))
+                || (op.ends_with('<') && op[..op.len()-1].chars().all(|c| c.is_ascii_digit()))
+            {
+                if i + 1 >= tokens.len() {
+                    eprintln!("syntax error: expected filename after redirection");
+                    return 1;
                 }
+                redirects.push((tokens[i].clone(), tokens[i + 1].clone(), parse_fd(&tokens[i])));
+                i += 2;
+            } else {
+                remaining.push(tokens[i].clone());
+                i += 1;
             }
         }
 
-        if tokens.is_empty() {
+        if remaining.is_empty() {
             return 0;
         }
 
-        let cmd = tokens[0].as_str();
-        let args_vec: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
+        let cmd = remaining[0].as_str();
+        let args_vec: Vec<&str> = remaining.iter().skip(1).map(|s| s.as_str()).collect();
 
         let mut saved_fds: Vec<(i32, RawFd)> = Vec::new();
 
@@ -136,4 +123,17 @@ pub fn process_command(command: &str) -> i32 {
         }
 
         exit_code
+}
+
+fn parse_fd(op: &str) -> i32 {
+    if op == ">" || op == ">>" || op == "<" {
+        if op == "<" { 0 } else { 1 }
+    } else {
+        let num_part = if op.ends_with(">>") {
+            &op[..op.len()-2]
+        } else {
+            &op[..op.len()-1]
+        };
+        num_part.parse::<i32>().unwrap_or(if op.contains('<') { 0 } else { 1 })
     }
+}

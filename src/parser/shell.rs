@@ -66,7 +66,6 @@ impl Shell {
                         .map(|s| s.to_string())
                         .collect();
 
-                    // Split on ";"
                     let commands: Vec<&str> = trimmed.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
                     for command in commands {
@@ -100,9 +99,9 @@ impl Shell {
                                 HistoryAction::None => {}
                             }
                         } else if command.contains('|') {
-                            self.last_exit_code = pipeline::execute_pipeline(command, &history_vec);
+                            self.last_exit_code = pipeline::execute_pipeline(command, &history_vec, self.last_exit_code);
                         } else {
-                            self.last_exit_code = process_command(command);
+                            self.last_exit_code = process_command(command, self.last_exit_code);
                         }
                     }
                 }
