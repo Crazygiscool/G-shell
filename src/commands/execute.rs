@@ -3,7 +3,7 @@ use std::process::Command;
 use std::fs::File;
 use std::os::unix::process::CommandExt;
 
-pub fn execute(cmd: &str, args: &[&str], redirect: Option<(&str, i32)>) {
+pub fn execute(cmd: &str, args: &[&str], redirect: Option<(&str, i32)>) -> i32 {
         if let Some(path) = find_executable_in_path(cmd) {
             let mut child = Command::new(&path);
 
@@ -11,30 +11,39 @@ pub fn execute(cmd: &str, args: &[&str], redirect: Option<(&str, i32)>) {
             child.args(args);
 
             if let Some((filename, fd)) = redirect {
-                if fd == 1 {
-                    match File::create(filename) {
-                        Ok(file) => {
-                            child.stdout(file);
-                        }
-                        Err(e) => {
-                            eprintln!("{}: {}", filename, e);
-                            return;
+                match fd {
+                    1 => {
+                        match File::create(filename) {
+                            Ok(file) => { child.stdout(file); }
+                            Err(e) => { eprintln!("{}: {}", filename, e); return 1; }
                         }
                     }
+                    2 => {
+                        match File::create(filename) {
+                            Ok(file) => { child.stderr(file); }
+                            Err(e) => { eprintln!("{}: {}", filename, e); return 1; }
+                        }
+                    }
+                    0 => {
+                        match File::open(filename) {
+                            Ok(file) => { child.stdin(file); }
+                            Err(e) => { eprintln!("{}: {}", filename, e); return 1; }
+                        }
+                    }
+                    _ => {}
                 }
             }
 
             match child.status() {
                 Ok(status) => {
-                    if !status.success() {
-                        return;
-                    }
+                    status.code().unwrap_or(1)
                 }
                 Err(_e) => {
-                    return;
+                    1
                 }
             }
         } else {
             eprintln!("{}: command not found", cmd);
+            1
         }
     }

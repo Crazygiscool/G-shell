@@ -26,6 +26,8 @@ pub fn tokenize(input: &str) -> Vec<String> {
                         match chars.next() {
                             Some('"') => cur.push('"'),
                             Some('\\') => cur.push('\\'),
+                            Some('$') => cur.push('$'),
+                            Some('`') => cur.push('`'),
                             Some('\n') => { /* line continuation */ }
                             Some(ch) => {
                                 cur.push('\\');
@@ -42,6 +44,11 @@ pub fn tokenize(input: &str) -> Vec<String> {
                     }
                 }
 
+                // COMMENTS
+                '#' if !in_single && !in_double && cur.is_empty() => {
+                    break;
+                }
+
                 // WHITESPACE SPLITTING
                 c if c.is_whitespace() && !in_single && !in_double => {
                     if !cur.is_empty() {
@@ -50,30 +57,52 @@ pub fn tokenize(input: &str) -> Vec<String> {
                     }
                 }
 
-                // FD REDIRECTION (e.g., 1>, 2>)
+                // FD REDIRECTION (e.g., 1>, 1>>, 2>, 2>>)
                 c if !in_single && !in_double && c.is_ascii_digit() => {
+                    let mut op = String::new();
+                    op.push(c);
                     if let Some('>') = chars.peek().copied() {
-                        chars.next(); // consume '>'
-                        if !cur.is_empty() {
-                            tokens.push(cur.clone());
-                            cur.clear();
-                        }
-                        let mut op = String::new();
-                        op.push(c);
+                        chars.next();
                         op.push('>');
-                        tokens.push(op);
+                        // check for >>
+                        if let Some('>') = chars.peek().copied() {
+                            chars.next();
+                            op.push('>');
+                        }
+                    } else if let Some('<') = chars.peek().copied() {
+                        chars.next();
+                        op.push('<');
                     } else {
                         cur.push(c);
+                        continue;
                     }
+                    if !cur.is_empty() {
+                        tokens.push(cur.clone());
+                        cur.clear();
+                    }
+                    tokens.push(op);
                 }
 
-                // PLAIN REDIRECTION OPERATOR ">"
+                // REDIRECTION OPERATORS: ">", ">>", "<"
                 '>' if !in_single && !in_double => {
                     if !cur.is_empty() {
                         tokens.push(cur.clone());
                         cur.clear();
                     }
-                    tokens.push(">".to_string());
+                    if let Some('>') = chars.peek().copied() {
+                        chars.next();
+                        tokens.push(">>".to_string());
+                    } else {
+                        tokens.push(">".to_string());
+                    }
+                }
+
+                '<' if !in_single && !in_double => {
+                    if !cur.is_empty() {
+                        tokens.push(cur.clone());
+                        cur.clear();
+                    }
+                    tokens.push("<".to_string());
                 }
 
                 // NORMAL CHARACTER

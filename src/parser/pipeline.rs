@@ -3,46 +3,60 @@ use std::io::Write;
 use std::env;
 use std::fs;
 use std::path::{PathBuf};
-use os_pipe::pipe; 
+use os_pipe::pipe;
 use crate::parser::tokenize::tokenize;
 
-// UPDATE: Added history_data parameter to match the call in main.rs
-pub fn execute_pipeline(line: &str, history_data: &[String]) {
+pub fn execute_pipeline(line: &str, history_data: &[String]) -> i32 {
     let segments: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
     let mut prev_stdin: Option<Stdio> = None;
     let mut children = Vec::new();
     let total = segments.len();
-
-    // UPDATE: Added "history" to the builtin list
     let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
+    let mut exit_code = 0;
 
     for (i, segment) in segments.into_iter().enumerate() {
         let mut parts = tokenize(segment);
+        if parts.is_empty() { continue; }
+
+        // Extract input redirect: look for "<" or "N<"
+        let mut stdin_file: Option<String> = None;
+        if let Some(pos) = parts.iter().position(|t| t == "<" || (t.ends_with('<') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))) {
+            if pos + 1 < parts.len() {
+                stdin_file = Some(parts[pos + 1].clone());
+                parts.drain(pos..=pos + 1);
+            }
+        }
+
         if parts.is_empty() { continue; }
         let program = parts.remove(0);
         let is_last = i == total - 1;
 
         if builtins.contains(&program.as_str()) {
             if is_last {
-                // UPDATE: Pass history_data here
                 run_builtin(&program, parts, history_data);
                 prev_stdin = None;
             } else {
                 let (reader, mut writer) = pipe().expect("Pipe failed");
-                // UPDATE: Pass history_data here
                 let output = get_builtin_output(&program, parts, history_data);
                 let _ = writer.write_all(output.as_bytes());
-                drop(writer); 
-
+                drop(writer);
                 prev_stdin = Some(Stdio::from(reader));
             }
             continue;
         }
 
-        let mut cmd = Command::new(program);
-        cmd.args(parts);
+        let mut cmd = Command::new(&program);
+        cmd.args(&parts);
 
-        if let Some(stdin) = prev_stdin.take() {
+        if let Some(file) = stdin_file {
+            if let Ok(f) = fs::File::open(&file) {
+                cmd.stdin(Stdio::from(f));
+            } else {
+                eprintln!("{}: No such file or directory", file);
+                exit_code = 1;
+                break;
+            }
+        } else if let Some(stdin) = prev_stdin.take() {
             cmd.stdin(stdin);
         }
 
@@ -51,6 +65,7 @@ pub fn execute_pipeline(line: &str, history_data: &[String]) {
         } else {
             cmd.stdout(Stdio::inherit());
         }
+        cmd.stderr(Stdio::inherit());
 
         match cmd.spawn() {
             Ok(mut child) => {
@@ -63,15 +78,25 @@ pub fn execute_pipeline(line: &str, history_data: &[String]) {
             }
             Err(e) => {
                 eprintln!("Execution error: {}", e);
-                for mut c in children { let _ = c.kill(); }
-                return;
+                for c in &mut children { let _ = c.kill(); }
+                exit_code = 1;
+                break;
             }
         }
     }
 
     for mut child in children {
-        let _ = child.wait().expect("Wait failed");
+        match child.wait() {
+            Ok(status) => {
+                if let Some(code) = status.code() {
+                    exit_code = code;
+                }
+            }
+            Err(_) => { exit_code = 1; }
+        }
     }
+
+    exit_code
 }
 
 fn find_in_path(cmd: &str) -> Option<PathBuf> {
@@ -85,7 +110,6 @@ fn find_in_path(cmd: &str) -> Option<PathBuf> {
     None
 }
 
-// UPDATE: Added history_data parameter
 fn get_builtin_output(name: &str, args: Vec<String>, history_data: &[String]) -> String {
     match name {
         "echo" => format!("{}\n", args.join(" ")),
@@ -113,7 +137,6 @@ fn get_builtin_output(name: &str, args: Vec<String>, history_data: &[String]) ->
     }
 }
 
-// UPDATE: Added history_data parameter
 fn run_builtin(name: &str, args: Vec<String>, history_data: &[String]) {
     match name {
         "echo" | "pwd" | "type" | "history" => {
@@ -121,7 +144,8 @@ fn run_builtin(name: &str, args: Vec<String>, history_data: &[String]) {
             let _ = std::io::stdout().flush();
         }
         "exit" => {
-            std::process::exit(0);
+            let code = args.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+            std::process::exit(code);
         }
         "cd" => {
             if let Some(path) = args.first() {

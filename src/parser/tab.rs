@@ -6,7 +6,7 @@ use std::path::Path;
 
 pub fn complete_command(prefix: &str) -> Vec<String> {
     let mut matches = Vec::new();
-    let builtins = ["echo", "cd", "pwd", "type", "exit"];
+    let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
 
     // 1. Check Builtins
     for &cmd in builtins.iter().filter(|c| c.starts_with(prefix)) {

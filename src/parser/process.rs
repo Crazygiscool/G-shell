@@ -1,7 +1,11 @@
 use std::os::unix::io::RawFd;
 
 use crate::parser::tokenize::tokenize;
-use crate::parser::redirect_stdout::{redirect_stdout_to, restore_stdout};
+use crate::parser::redirect_stdout::{
+    redirect_stdout_to, redirect_stdout_append,
+    redirect_stderr_to, redirect_stderr_append,
+    redirect_stdin_from, restore_fd,
+};
 
 use crate::commands::cd::cd;
 use crate::commands::echo::echo;
@@ -9,8 +13,8 @@ use crate::commands::pwd::pwd;
 use crate::commands::r#type::r#type;
 use crate::commands::execute::execute;
 
-pub fn process_command(command: &str) {
-        let regix: &[[&str; 2]; 6] = &[
+pub fn process_command(command: &str) -> i32 {
+        let registry: &[[&str; 2]; 6] = &[
             ["echo", "builtin"],
             ["type", "builtin"],
             ["exit", "builtin"],
@@ -21,60 +25,99 @@ pub fn process_command(command: &str) {
 
         let mut tokens = tokenize(command);
         if tokens.is_empty() {
-            return;
+            return 0;
         }
 
-        // Handle redirection: ">", "1>", "2>", etc. (we only honor fd 1)
-        let mut redirect: Option<(String, i32)> = None;
+        // Handle redirection: ">", ">>", "<", "1>", "1>>", "2>", "2>>", etc.
+        let mut redirects: Vec<(String, String, i32)> = Vec::new();
 
-        if let Some(i) = tokens.iter().position(|t| t == ">" || (t.ends_with('>') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))) {
-            if i + 1 >= tokens.len() {
-                eprintln!("syntax error: expected filename after redirection");
-                return;
+        loop {
+            let pos = tokens.iter().position(|t| {
+                t == ">" || t == ">>" || t == "<"
+                || (t.ends_with('>') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))
+                || (t.ends_with(">>") && t[..t.len()-2].chars().all(|c| c.is_ascii_digit()))
+                || (t.ends_with('<') && t[..t.len()-1].chars().all(|c| c.is_ascii_digit()))
+            });
+
+            match pos {
+                None => break,
+                Some(i) => {
+                    if i + 1 >= tokens.len() {
+                        eprintln!("syntax error: expected filename after redirection");
+                        return 1;
+                    }
+
+                    let op = tokens[i].clone();
+                    let filename = tokens[i + 1].clone();
+
+                    let fd = if op == ">" || op == ">>" || op == "<" {
+                        if op == "<" { 0 } else { 1 }
+                    } else {
+                        let num_part = if op.ends_with(">>") {
+                            &op[..op.len()-2]
+                        } else {
+                            &op[..op.len()-1]
+                        };
+                        num_part.parse::<i32>().unwrap_or(if op.contains('<') { 0 } else { 1 })
+                    };
+
+                    redirects.push((op, filename, fd));
+                    tokens.drain(i..=i + 1);
+                }
             }
-
-            let op = tokens[i].clone();
-            let fd = if op == ">" {
-                1
-            } else {
-                op[..op.len() - 1].parse::<i32>().unwrap_or(1)
-            };
-
-            let filename = tokens[i + 1].clone();
-            redirect = Some((filename, fd));
-
-            tokens.drain(i..=i + 1);
         }
 
         if tokens.is_empty() {
-            return;
+            return 0;
         }
 
         let cmd = tokens[0].as_str();
         let args_vec: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
 
-        let mut old_stdout: Option<RawFd> = None;
+        let mut saved_fds: Vec<(i32, RawFd)> = Vec::new();
 
-        if let Some((filename, fd)) = redirect.as_ref() {
-            if *fd == 1 {
-                old_stdout = redirect_stdout_to(filename);
+        for (op, filename, fd) in &redirects {
+            let saved = match (op.as_str(), *fd) {
+                (">", 1) | ("1>", 1) => redirect_stdout_to(filename).map(|f| (1, f)),
+                (">>", 1) | ("1>>", 1) => redirect_stdout_append(filename).map(|f| (1, f)),
+                (">", 2) | ("2>", 2) => redirect_stderr_to(filename).map(|f| (2, f)),
+                (">>", 2) | ("2>>", 2) => redirect_stderr_append(filename).map(|f| (2, f)),
+                ("<", 0) | ("0<", 0) => redirect_stdin_from(filename).map(|f| (0, f)),
+                _ => {
+                    eprintln!("{}: unsupported redirection", op);
+                    None
+                }
+            };
+            if let Some(pair) = saved {
+                saved_fds.push(pair);
             }
         }
 
-        match cmd {
-            "exit" => std::process::exit(0),
+        let exit_code = match cmd {
+            "exit" => {
+                let code = args_vec.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+                std::process::exit(code);
+            }
 
-            "echo" => echo(&args_vec),
+            "echo" => {
+                echo(&args_vec);
+                0
+            }
 
             "type" => {
                 if let Some(first) = args_vec.first() {
-                    r#type(first, regix);
+                    r#type(first, registry);
+                    0
                 } else {
                     eprintln!("type: missing operand");
+                    1
                 }
             }
 
-            "pwd" => pwd(),
+            "pwd" => {
+                pwd();
+                0
+            }
 
             "cd" => {
                 if let Some(first) = args_vec.first() {
@@ -82,12 +125,15 @@ pub fn process_command(command: &str) {
                 } else {
                     cd("");
                 }
+                0
             }
 
-            _ => execute(cmd, &args_vec, redirect.as_ref().map(|(f, fd)| (f.as_str(), *fd))),
+            _ => execute(cmd, &args_vec, redirects.first().map(|(op, _filename, fd)| (op.as_str(), *fd))),
+        };
+
+        for (target, saved_fd) in saved_fds.into_iter().rev() {
+            restore_fd(saved_fd, target);
         }
 
-        if let Some(fd) = old_stdout {
-            restore_stdout(fd);
-        }
+        exit_code
     }
