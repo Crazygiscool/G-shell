@@ -12,7 +12,7 @@ pub fn execute_pipeline(line: &str, history_data: &[String], last_exit_code: i32
     let mut prev_stdin: Option<Stdio> = None;
     let mut children = Vec::new();
     let total = segments.len();
-    let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
+                let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env"];
     let mut exit_code = 0;
 
     for (i, segment) in segments.into_iter().enumerate() {
@@ -133,7 +133,7 @@ fn get_builtin_output(name: &str, args: Vec<String>, history_data: &[String]) ->
         },
         "type" => {
             if let Some(cmd) = args.first() {
-                let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
+    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env"];
                 if builtins.contains(&cmd.as_str()) {
                     format!("{} is a shell builtin\n", cmd)
                 } else if let Some(path) = find_in_path(cmd) {
@@ -154,6 +154,16 @@ fn run_builtin(name: &str, args: Vec<String>, history_data: &[String]) {
         "echo" | "pwd" | "type" | "history" => {
             print!("{}", get_builtin_output(name, args, history_data));
             let _ = std::io::stdout().flush();
+        }
+        "export" | "unset" | "set" | "env" => {
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            match name {
+                "export" => crate::commands::env::export_var(&args_ref),
+                "unset" => crate::commands::env::unset_var(&args_ref),
+                "set" => crate::commands::env::set_vars(),
+                "env" => crate::commands::env::env_vars(),
+                _ => {}
+            }
         }
         "exit" => {
             let code = args.first().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);

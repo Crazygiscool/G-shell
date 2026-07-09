@@ -13,15 +13,21 @@ use crate::commands::echo::echo;
 use crate::commands::pwd::pwd;
 use crate::commands::r#type::r#type;
 use crate::commands::execute::execute;
+use crate::commands::env::{export_var, unset_var, set_vars, env_vars};
 
 pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
-        let registry: &[[&str; 2]; 6] = &[
+        let registry: &[[&str; 2]; 11] = &[
             ["echo", "builtin"],
             ["type", "builtin"],
             ["exit", "builtin"],
             ["pwd", "builtin"],
             ["cd", "builtin"],
             ["history", "builtin"],
+            ["export", "builtin"],
+            ["unset", "builtin"],
+            ["set", "builtin"],
+            ["env", "builtin"],
+            ["source", "builtin"],
         ];
 
         let raw_tokens = tokenize(command);
@@ -58,8 +64,33 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             return 0;
         }
 
-        let cmd = remaining[0].as_str();
-        let args_vec: Vec<&str> = remaining.iter().skip(1).map(|s| s.as_str()).collect();
+        // FOO=bar cmd support: extract leading KEY=VAL tokens
+        let mut env_overrides: Vec<(String, String)> = Vec::new();
+        let mut cmd_index = 0;
+        for token in &remaining {
+            if let Some(eq_pos) = token.find('=') {
+                if eq_pos > 0 && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '=') {
+                    let name = token[..eq_pos].to_string();
+                    let value = token[eq_pos + 1..].to_string();
+                    env_overrides.push((name, value));
+                    cmd_index += 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let cmd = if cmd_index < remaining.len() { remaining[cmd_index].as_str() } else { return 0; };
+        let args_vec: Vec<&str> = remaining.iter().skip(cmd_index + 1).map(|s| s.as_str()).collect();
+
+        // Push env overrides
+        let originals: Vec<(String, Option<String>)> = env_overrides.iter().map(|(k, v)| {
+            let old = std::env::var(k).ok();
+            unsafe { std::env::set_var(k, v); }
+            (k.clone(), old)
+        }).collect();
 
         let mut saved_fds: Vec<(i32, RawFd)> = Vec::new();
 
@@ -87,12 +118,22 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             }
 
             "echo" => {
-                echo(&args_vec);
-                0
+                if args_vec.first().map(|s| *s == "--help").unwrap_or(false) {
+                    println!("echo: echo [string ...]");
+                    println!("    Write arguments to standard output.");
+                    0
+                } else {
+                    echo(&args_vec);
+                    0
+                }
             }
 
             "type" => {
-                if let Some(first) = args_vec.first() {
+                if args_vec.first().map(|s| *s == "--help").unwrap_or(false) {
+                    println!("type: type [name ...]");
+                    println!("    Display information about command type.");
+                    0
+                } else if let Some(first) = args_vec.first() {
                     r#type(first, registry);
                     0
                 } else {
@@ -102,21 +143,65 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             }
 
             "pwd" => {
-                pwd();
-                0
+                if args_vec.first().map(|s| *s == "--help").unwrap_or(false) {
+                    println!("pwd: pwd");
+                    println!("    Print the current working directory.");
+                    0
+                } else {
+                    pwd();
+                    0
+                }
             }
 
             "cd" => {
-                if let Some(first) = args_vec.first() {
-                    cd(first);
+                if args_vec.first().map(|s| *s == "--help").unwrap_or(false) {
+                    println!("cd: cd [dir]");
+                    println!("    Change the current working directory.");
+                    0
                 } else {
-                    cd("");
+                    if let Some(first) = args_vec.first() {
+                        cd(first);
+                    } else {
+                        cd("");
+                    }
+                    0
                 }
+            }
+
+            "export" => {
+                if args_vec.is_empty() {
+                    set_vars();
+                } else {
+                    export_var(&args_vec);
+                }
+                0
+            }
+
+            "unset" => {
+                unset_var(&args_vec);
+                0
+            }
+
+            "set" => {
+                set_vars();
+                0
+            }
+
+            "env" => {
+                env_vars();
                 0
             }
 
             _ => execute(cmd, &args_vec, redirects.first().map(|(op, _filename, fd)| (op.as_str(), *fd))),
         };
+
+        // Restore original env vars
+        for (name, old) in originals.into_iter().rev() {
+            match old {
+                Some(v) => unsafe { std::env::set_var(&name, v); },
+                None => unsafe { std::env::remove_var(&name); },
+            }
+        }
 
         for (target, saved_fd) in saved_fds.into_iter().rev() {
             restore_fd(saved_fd, target);
