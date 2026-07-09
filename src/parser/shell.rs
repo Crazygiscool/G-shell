@@ -55,8 +55,6 @@ impl Shell {
                     let trimmed = buffer.trim();
                     if trimmed.is_empty() { continue; }
 
-                    let _ = self.rl.add_history_entry(trimmed);
-
                     if trimmed == "exit" {
                         break;
                     }
@@ -66,7 +64,11 @@ impl Shell {
                         .map(|s| s.to_string())
                         .collect();
 
-                    let commands: Vec<&str> = trimmed.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                    let expanded = expand_history(trimmed, &history_vec);
+
+                    let _ = self.rl.add_history_entry(&expanded);
+
+                    let commands: Vec<&str> = expanded.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 
                     for command in commands {
                         if command == "exit" {
@@ -98,6 +100,8 @@ impl Shell {
                                 }
                                 HistoryAction::None => {}
                             }
+                        } else if command.contains("&&") || command.contains("||") {
+                            self.last_exit_code = execute_and_or_list(command, &history_vec, self.last_exit_code);
                         } else if command.contains('|') {
                             self.last_exit_code = pipeline::execute_pipeline(command, &history_vec, self.last_exit_code);
                         } else {
@@ -131,4 +135,113 @@ impl Shell {
         writer.flush()?;
         Ok(())
     }
+}
+
+fn execute_and_or_list(command: &str, history_data: &[String], last_exit_code: i32) -> i32 {
+    let mut code = 0;
+    let mut remaining = command;
+    let mut expect_success = true;
+
+    loop {
+        let rest = remaining.trim();
+        if rest.is_empty() { break; }
+
+        if expect_success {
+            if let Some(pos) = rest.find("&&") {
+                let cmd = &rest[..pos].trim();
+                code = execute_single(cmd, history_data, last_exit_code);
+                remaining = &rest[pos + 2..];
+                expect_success = code == 0;
+            } else if let Some(pos) = rest.find("||") {
+                let cmd = &rest[..pos].trim();
+                code = execute_single(cmd, history_data, last_exit_code);
+                remaining = &rest[pos + 2..];
+                expect_success = code == 0;
+            } else {
+                code = execute_single(rest, history_data, last_exit_code);
+                break;
+            }
+        } else {
+            if let Some(pos) = rest.find("||") {
+                let cmd = &rest[..pos].trim();
+                code = execute_single(cmd, history_data, last_exit_code);
+                remaining = &rest[pos + 2..];
+                expect_success = code == 0;
+            } else if let Some(pos) = rest.find("&&") {
+                let cmd = &rest[..pos].trim();
+                code = execute_single(cmd, history_data, last_exit_code);
+                remaining = &rest[pos + 2..];
+                expect_success = code == 0;
+            } else {
+                break;
+            }
+        }
+    }
+
+    code
+}
+
+fn execute_single(cmd: &str, history_data: &[String], last_exit_code: i32) -> i32 {
+    if cmd.contains('|') {
+        pipeline::execute_pipeline(cmd, history_data, last_exit_code)
+    } else {
+        process_command(cmd, last_exit_code)
+    }
+}
+
+fn expand_history(input: &str, history: &[String]) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '!' {
+            match chars.peek() {
+                Some('!') => {
+                    chars.next();
+                    if let Some(last) = history.last() {
+                        result.push_str(last);
+                    }
+                }
+                Some('$') => {
+                    chars.next();
+                    if let Some(last) = history.last() {
+                        if let Some(word) = last.split_whitespace().last() {
+                            result.push_str(word);
+                        }
+                    }
+                }
+                Some('?') => {
+                    chars.next();
+                    result.push_str(&last_exit_code_string());
+                }
+                Some(d) if d.is_ascii_digit() => {
+                    let mut num_str = String::new();
+                    while let Some(&n) = chars.peek() {
+                        if n.is_ascii_digit() {
+                            num_str.push(n);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Ok(n) = num_str.parse::<usize>() {
+                        if n > 0 && n <= history.len() {
+                            result.push_str(&history[n - 1]);
+                        }
+                    }
+                }
+                _ => {
+                    result.push('!');
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+fn last_exit_code_string() -> String {
+    "0".to_string()
 }
