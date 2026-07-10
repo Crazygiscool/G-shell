@@ -112,7 +112,8 @@ impl Shell {
     }
 
     fn execute_foreground(&mut self, command: &str, history_data: &[String]) {
-        let mut tokens = tokenize(command);
+        let command = self.process_heredocs(command);
+        let mut tokens = tokenize(&command);
         if tokens.is_empty() { return; }
         let cmd = tokens.remove(0);
 
@@ -141,11 +142,11 @@ impl Shell {
             }
             _ => {
                 if command.contains("&&") || command.contains("||") {
-                    self.last_exit_code = execute_and_or_list(command, history_data, self.last_exit_code);
+                    self.last_exit_code = execute_and_or_list(&command, history_data, self.last_exit_code);
                 } else if command.contains('|') {
-                    self.last_exit_code = pipeline::execute_pipeline(command, history_data, self.last_exit_code);
+                    self.last_exit_code = pipeline::execute_pipeline(&command, history_data, self.last_exit_code);
                 } else {
-                    self.last_exit_code = process_command(command, self.last_exit_code);
+                    self.last_exit_code = process_command(&command, self.last_exit_code);
                 }
             }
         }
@@ -179,6 +180,51 @@ impl Shell {
             }
         } else {
             eprintln!("{}: command not found", program);
+        }
+    }
+
+    fn process_heredocs(&mut self, command: &str) -> String {
+        let tokens: Vec<String> = crate::parser::tokenize::tokenize(command);
+        let heredoc_pos = tokens.iter().position(|t| t == "<<" || t.ends_with("<<"));
+        match heredoc_pos {
+            None => command.to_string(),
+            Some(pos) => {
+                if pos + 1 >= tokens.len() {
+                    return command.to_string();
+                }
+                let delimiter = tokens[pos + 1].clone();
+                let mut lines = Vec::new();
+                loop {
+                    let readline = self.rl.readline("> ");
+                    match readline {
+                        Ok(line) => {
+                            if line.trim() == delimiter {
+                                break;
+                            }
+                            lines.push(line);
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let temp_dir = std::env::temp_dir();
+                let temp_path = temp_dir.join(format!("gshell_heredoc_{}", std::process::id()));
+                if let Ok(mut f) = std::fs::File::create(&temp_path) {
+                    use std::io::Write;
+                    for line in &lines {
+                        let _ = writeln!(f, "{}", line);
+                    }
+                }
+                let mut result = command.to_string();
+                if let Some(heredoc_start) = result.find("<<") {
+                    let after_op = &result[heredoc_start..];
+                    if let Some(delim_end) = after_op.find(&delimiter) {
+                        let before = &result[..heredoc_start];
+                        let after = &result[heredoc_start + delim_end + delimiter.len()..];
+                        result = format!("{}< {}", before.trim_end(), temp_path.to_string_lossy()) + after;
+                    }
+                }
+                result
+            }
         }
     }
 

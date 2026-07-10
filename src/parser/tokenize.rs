@@ -72,6 +72,10 @@ pub fn tokenize(input: &str) -> Vec<String> {
                     } else if let Some('<') = chars.peek().copied() {
                         chars.next();
                         op.push('<');
+                        if let Some('<') = chars.peek().copied() {
+                            chars.next();
+                            op.push('<');
+                        }
                     } else {
                         cur.push(c);
                         continue;
@@ -102,7 +106,12 @@ pub fn tokenize(input: &str) -> Vec<String> {
                         tokens.push(cur.clone());
                         cur.clear();
                     }
-                    tokens.push("<".to_string());
+                    if let Some('<') = chars.peek() {
+                        chars.next();
+                        tokens.push("<<".to_string());
+                    } else {
+                        tokens.push("<".to_string());
+                    }
                 }
 
                 // NORMAL CHARACTER

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use os_pipe::pipe;
 use crate::parser::tokenize::tokenize;
 use crate::parser::expand::expand_tokens;
+use crate::parser::glob::expand_globs;
 
 pub fn execute_pipeline(line: &str, history_data: &[String], last_exit_code: i32) -> i32 {
     let segments: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
@@ -19,7 +20,8 @@ pub fn execute_pipeline(line: &str, history_data: &[String], last_exit_code: i32
         let raw_parts = tokenize(segment);
         if raw_parts.is_empty() { continue; }
 
-        let parts = expand_tokens(&raw_parts, last_exit_code);
+        let expanded = expand_tokens(&raw_parts, last_exit_code);
+        let parts = expand_globs(&expanded);
 
         let mut stdin_file: Option<String> = None;
         let mut final_parts: Vec<String> = Vec::new();

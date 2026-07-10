@@ -2,6 +2,7 @@ use std::os::unix::io::RawFd;
 
 use crate::parser::tokenize::tokenize;
 use crate::parser::expand::expand_tokens;
+use crate::parser::glob::expand_globs;
 use crate::parser::redirect_stdout::{
     redirect_stdout_to, redirect_stdout_append,
     redirect_stderr_to, redirect_stderr_append,
@@ -35,7 +36,8 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             return 0;
         }
 
-        let tokens = expand_tokens(&raw_tokens, last_exit_code);
+        let expanded = expand_tokens(&raw_tokens, last_exit_code);
+        let tokens = expand_globs(&expanded);
 
         let mut redirects: Vec<(String, String, i32)> = Vec::new();
         let mut remaining: Vec<String> = Vec::new();
@@ -190,6 +192,34 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             "env" => {
                 env_vars();
                 0
+            }
+
+            "source" => {
+                if let Some(path) = args_vec.first() {
+                    match std::fs::read_to_string(path) {
+                        Ok(contents) => {
+                            for line in contents.lines() {
+                                let line = line.trim();
+                                if line.is_empty() || line.starts_with('#') {
+                                    continue;
+                                }
+                                if line.contains('|') {
+                                    crate::parser::pipeline::execute_pipeline(line, &[], last_exit_code);
+                                } else {
+                                    process_command(line, last_exit_code);
+                                }
+                            }
+                            0
+                        }
+                        Err(e) => {
+                            eprintln!("{}: {}: {}", cmd, path, e);
+                            1
+                        }
+                    }
+                } else {
+                    eprintln!("source: missing filename");
+                    1
+                }
             }
 
             _ => execute(cmd, &args_vec, redirects.first().map(|(op, _filename, fd)| (op.as_str(), *fd))),
