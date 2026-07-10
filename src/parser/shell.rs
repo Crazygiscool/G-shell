@@ -6,6 +6,8 @@ use crate::parser::{pipeline, tokenize::tokenize};
 use crate::commands::history::{history as history_cmd, HistoryAction};
 use crate::parser::process::process_command;
 use std::fs::{File, OpenOptions};
+use pathsearch::find_executable_in_path;
+use std::os::unix::process::CommandExt;
 use std::io::{BufWriter, Write};
 use std::env;
 
@@ -13,11 +15,24 @@ pub struct Shell {
     rl: Editor<ShellHelper, FileHistory>,
     history_start_index: usize,
     history_file: String,
-    last_exit_code: i32,
+    pub last_exit_code: i32,
+}
+
+extern "C" fn sigint_handler(_sig: i32) {
+    // Newline to let the user type again
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(b"\n");
 }
 
 impl Shell {
     pub fn new() -> rustyline::Result<Self> {
+        // Install SIGINT handler
+        unsafe {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = sigint_handler as *const () as usize;
+            libc::sigaction(libc::SIGINT, &act, std::ptr::null_mut());
+        }
+
         let config = Config::builder()
             .completion_type(CompletionType::List)
             .bell_style(BellStyle::Audible)
@@ -75,37 +90,18 @@ impl Shell {
                             return Ok(());
                         }
 
-                        let mut tokens = tokenize(command);
-                        if tokens.is_empty() { continue; }
-                        let cmd = tokens.remove(0);
-
-                        if cmd == "history" {
-                            match history_cmd(&history_vec, &tokens, &self.history_file) {
-                                HistoryAction::Load(path) => {
-                                    if let Err(_) = self.rl.load_history(&path) {
-                                        eprintln!("history: {}: No such file or directory", path);
-                                    }
-                                    self.history_start_index = self.rl.history().len();
-                                }
-                                HistoryAction::Write(path) => {
-                                    let _ = self.save_history_plain(&path, false);
-                                }
-                                HistoryAction::Append(path) => {
-                                    let _ = self.save_history_plain(&path, true);
-                                    self.history_start_index = self.rl.history().len();
-                                }
-                                HistoryAction::Clear => {
-                                    let _ = self.rl.clear_history();
-                                    self.history_start_index = 0;
-                                }
-                                HistoryAction::None => {}
-                            }
-                        } else if command.contains("&&") || command.contains("||") {
-                            self.last_exit_code = execute_and_or_list(command, &history_vec, self.last_exit_code);
-                        } else if command.contains('|') {
-                            self.last_exit_code = pipeline::execute_pipeline(command, &history_vec, self.last_exit_code);
+                        // Check for & (background)
+                        let (cmd, bg) = if command.ends_with('&') {
+                            let c = command[..command.len()-1].trim();
+                            (c, true)
                         } else {
-                            self.last_exit_code = process_command(command, self.last_exit_code);
+                            (command, false)
+                        };
+
+                        if bg {
+                            self.execute_background(cmd, &history_vec);
+                        } else {
+                            self.execute_foreground(cmd, &history_vec);
                         }
                     }
                 }
@@ -113,6 +109,77 @@ impl Shell {
             }
         }
         Ok(())
+    }
+
+    fn execute_foreground(&mut self, command: &str, history_data: &[String]) {
+        let mut tokens = tokenize(command);
+        if tokens.is_empty() { return; }
+        let cmd = tokens.remove(0);
+
+        match cmd.as_str() {
+            "history" => {
+                match history_cmd(history_data, &tokens, &self.history_file) {
+                    HistoryAction::Load(path) => {
+                        if let Err(_) = self.rl.load_history(&path) {
+                            eprintln!("history: {}: No such file or directory", path);
+                        }
+                        self.history_start_index = self.rl.history().len();
+                    }
+                    HistoryAction::Write(path) => {
+                        let _ = self.save_history_plain(&path, false);
+                    }
+                    HistoryAction::Append(path) => {
+                        let _ = self.save_history_plain(&path, true);
+                        self.history_start_index = self.rl.history().len();
+                    }
+                    HistoryAction::Clear => {
+                        let _ = self.rl.clear_history();
+                        self.history_start_index = 0;
+                    }
+                    HistoryAction::None => {}
+                }
+            }
+            _ => {
+                if command.contains("&&") || command.contains("||") {
+                    self.last_exit_code = execute_and_or_list(command, history_data, self.last_exit_code);
+                } else if command.contains('|') {
+                    self.last_exit_code = pipeline::execute_pipeline(command, history_data, self.last_exit_code);
+                } else {
+                    self.last_exit_code = process_command(command, self.last_exit_code);
+                }
+            }
+        }
+    }
+
+    fn execute_background(&mut self, command: &str, _history_data: &[String]) {
+        use std::process::{Command, Stdio};
+
+        let tokens = tokenize(command);
+        if tokens.is_empty() { return; }
+        let program = tokens[0].clone();
+        let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
+
+        if let Some(path) = find_executable_in_path(&program) {
+            match Command::new(&path)
+                .arg0(&program)
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
+            {
+                Ok(child) => {
+                    let pid = child.id();
+                    println!("[{}] {}", pid, command);
+                    let _ = child; // don't wait — let init reap it
+                }
+                Err(e) => {
+                    eprintln!("{}: {}", program, e);
+                }
+            }
+        } else {
+            eprintln!("{}: command not found", program);
+        }
     }
 
     fn save_history_plain(&self, path: &str, append: bool) -> std::io::Result<()> {
@@ -212,7 +279,6 @@ fn expand_history(input: &str, history: &[String]) -> String {
                 }
                 Some('?') => {
                     chars.next();
-                    result.push_str(&last_exit_code_string());
                 }
                 Some(d) if d.is_ascii_digit() => {
                     let mut num_str = String::new();
@@ -240,8 +306,4 @@ fn expand_history(input: &str, history: &[String]) -> String {
     }
 
     result
-}
-
-fn last_exit_code_string() -> String {
-    "0".to_string()
 }
