@@ -6,7 +6,7 @@ use crate::parser::{pipeline, tokenize::tokenize};
 use crate::commands::history::{history as history_cmd, HistoryAction};
 use crate::parser::process::process_command;
 use std::fs::{File, OpenOptions};
-use pathsearch::find_executable_in_path;
+use crate::parser::pathcache;
 use std::os::unix::process::CommandExt;
 use std::io::{BufWriter, Write};
 use std::env;
@@ -46,6 +46,8 @@ impl Shell {
         let _ = rl.load_history(&history_file);
 
         let history_start_index = rl.history().len();
+
+        pathcache::refresh_cache();
 
         Ok(Shell { rl, history_start_index, history_file, last_exit_code: 0 })
     }
@@ -160,7 +162,7 @@ impl Shell {
         let program = tokens[0].clone();
         let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
 
-        if let Some(path) = find_executable_in_path(&program) {
+        if let Some(path) = pathcache::find_in_path_cache(&program) {
             match Command::new(&path)
                 .arg0(&program)
                 .args(&args)

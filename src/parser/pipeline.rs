@@ -114,14 +114,7 @@ pub fn execute_pipeline(line: &str, history_data: &[String], last_exit_code: i32
 }
 
 fn find_in_path(cmd: &str) -> Option<PathBuf> {
-    let paths = env::var_os("PATH")?;
-    for path in env::split_paths(&paths) {
-        let full_path = path.join(cmd);
-        if fs::metadata(&full_path).map(|m| m.is_file()).unwrap_or(false) {
-            return Some(full_path);
-        }
-    }
-    None
+    crate::parser::pathcache::find_in_path_cache(cmd)
 }
 
 fn get_builtin_output(name: &str, args: Vec<String>, history_data: &[String]) -> String {

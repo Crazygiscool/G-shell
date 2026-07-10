@@ -1,23 +1,17 @@
 use std::path::Path;
+use crate::parser::pathcache;
 
 pub fn complete_command(prefix: &str) -> Vec<String> {
-    let mut matches = Vec::new();
-    let builtins = ["echo", "cd", "pwd", "type", "exit", "history"];
+    let mut matches: Vec<String> = Vec::new();
+    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "source", "test", "alias", "unalias"];
 
     for &cmd in builtins.iter().filter(|c| c.starts_with(prefix)) {
         matches.push(cmd.to_string());
     }
 
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with(prefix) {
-                        matches.push(name);
-                    }
-                }
-            }
+    for cmd in pathcache::get_cached_commands() {
+        if cmd.starts_with(prefix) && !matches.contains(&cmd) {
+            matches.push(cmd);
         }
     }
 

@@ -1,10 +1,10 @@
-use pathsearch::find_executable_in_path;
 use std::process::Command;
 use std::fs::File;
 use std::os::unix::process::CommandExt;
+use crate::parser::pathcache;
 
 pub fn execute(cmd: &str, args: &[&str], redirect: Option<(&str, i32)>) -> i32 {
-        if let Some(path) = find_executable_in_path(cmd) {
+        if let Some(path) = pathcache::find_in_path_cache(cmd) {
             let mut child = Command::new(&path);
 
             child.arg0(cmd);
