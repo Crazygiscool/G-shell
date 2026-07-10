@@ -16,13 +16,14 @@ use crate::commands::r#type::r#type;
 use crate::commands::execute::execute;
 use crate::commands::env::{export_var, unset_var, set_vars, env_vars};
 use crate::commands::test::test_builtin;
+use crate::commands::help::help_cmd;
 use std::sync::Mutex;
 
 static ALIASES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
-        let registry: &[[&str; 2]; 15] = &[
+        let registry: &[[&str; 2]; 16] = &[
             ["echo", "builtin"],
             ["type", "builtin"],
             ["exit", "builtin"],
@@ -38,6 +39,7 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             ["[", "builtin"],
             ["alias", "builtin"],
             ["unalias", "builtin"],
+            ["help", "builtin"],
         ];
 
         let raw_tokens = tokenize(command);
@@ -252,6 +254,11 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
                 for arg in &args_vec {
                     alias_table.remove(*arg);
                 }
+                0
+            }
+
+            "help" => {
+                help_cmd(&args_vec);
                 0
             }
 

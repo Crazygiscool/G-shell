@@ -13,7 +13,7 @@ pub fn execute_pipeline(line: &str, history_data: &[String], last_exit_code: i32
     let mut prev_stdin: Option<Stdio> = None;
     let mut children = Vec::new();
     let total = segments.len();
-    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "test", "["];
+                let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "test", "[", "help"];
     let mut exit_code = 0;
 
     for (i, segment) in segments.into_iter().enumerate() {
@@ -128,7 +128,7 @@ fn get_builtin_output(name: &str, args: Vec<String>, history_data: &[String]) ->
         },
         "type" => {
             if let Some(cmd) = args.first() {
-                let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "test", "["];
+    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "test", "[", "help"];
                 if builtins.contains(&cmd.as_str()) {
                     format!("{} is a shell builtin\n", cmd)
                 } else if let Some(path) = find_in_path(cmd) {

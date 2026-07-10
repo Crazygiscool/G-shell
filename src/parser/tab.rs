@@ -3,7 +3,7 @@ use crate::parser::pathcache;
 
 pub fn complete_command(prefix: &str) -> Vec<String> {
     let mut matches: Vec<String> = Vec::new();
-    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "source", "test", "alias", "unalias"];
+    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "source", "test", "alias", "unalias", "help"];
 
     for &cmd in builtins.iter().filter(|c| c.starts_with(prefix)) {
         matches.push(cmd.to_string());
