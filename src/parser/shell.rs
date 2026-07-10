@@ -66,6 +66,11 @@ impl Shell {
 
     fn source_rcfile(&mut self) {
         let rcfile = env::var("GSHELLRC").unwrap_or_else(|_| {
+            // Check CWD first, then $HOME
+            let cwd_path = ".gshellrc";
+            if std::path::Path::new(cwd_path).exists() {
+                return cwd_path.to_string();
+            }
             env::var("HOME").map(|h| format!("{}/.gshellrc", h)).unwrap_or_default()
         });
         if rcfile.is_empty() {
