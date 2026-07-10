@@ -15,9 +15,14 @@ use crate::commands::pwd::pwd;
 use crate::commands::r#type::r#type;
 use crate::commands::execute::execute;
 use crate::commands::env::{export_var, unset_var, set_vars, env_vars};
+use crate::commands::test::test_builtin;
+use std::sync::Mutex;
+
+static ALIASES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
-        let registry: &[[&str; 2]; 11] = &[
+        let registry: &[[&str; 2]; 15] = &[
             ["echo", "builtin"],
             ["type", "builtin"],
             ["exit", "builtin"],
@@ -29,6 +34,10 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             ["set", "builtin"],
             ["env", "builtin"],
             ["source", "builtin"],
+            ["test", "builtin"],
+            ["[", "builtin"],
+            ["alias", "builtin"],
+            ["unalias", "builtin"],
         ];
 
         let raw_tokens = tokenize(command);
@@ -221,6 +230,32 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
                     1
                 }
             }
+
+            "alias" => {
+                let mut alias_table = ALIASES.lock().unwrap();
+                for arg in &args_vec {
+                    if let Some(eq_pos) = arg.find('=') {
+                        let name = arg[..eq_pos].to_string();
+                        let value = arg[eq_pos + 1..].trim_matches('\'').trim_matches('"').to_string();
+                        alias_table.insert(name, value);
+                    } else {
+                        if let Some(value) = alias_table.get(*arg) {
+                            println!("alias {}='{}'", arg, value);
+                        }
+                    }
+                }
+                0
+            }
+
+            "unalias" => {
+                let mut alias_table = ALIASES.lock().unwrap();
+                for arg in &args_vec {
+                    alias_table.remove(*arg);
+                }
+                0
+            }
+
+            "test" | "[" => test_builtin(&args_vec),
 
             _ => execute(cmd, &args_vec, redirects.first().map(|(op, _filename, fd)| (op.as_str(), *fd))),
         };

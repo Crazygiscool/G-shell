@@ -5,3 +5,4 @@ pub mod r#type;
 pub mod execute;
 pub mod history;
 pub mod env;
+pub mod test;
