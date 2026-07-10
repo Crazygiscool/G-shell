@@ -12,6 +12,7 @@ pub fn help_cmd(args: &[&str]) {
         println!("  ($(cmd) `cmd`), heredocs (<<), pipelines (|), sequences (;),");
         println!("  AND/OR lists (&& ||), background (&), history expansion");
         println!("  (!! !$ !N), tab completion, $PS1 prompt");
+        println!("  Init file: $GSHELLRC or ~/.gshellrc sourced on startup");
     } else {
         for topic in args {
             match *topic {

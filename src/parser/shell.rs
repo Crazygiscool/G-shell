@@ -53,6 +53,8 @@ impl Shell {
     }
 
     pub fn run(&mut self) -> rustyline::Result<()> {
+        self.source_rcfile();
+
         let result = self.run_loop();
 
         if let Err(e) = self.save_history_plain(&self.history_file.clone(), false) {
@@ -60,6 +62,36 @@ impl Shell {
         }
 
         result
+    }
+
+    fn source_rcfile(&mut self) {
+        let rcfile = env::var("GSHELLRC").unwrap_or_else(|_| {
+            env::var("HOME").map(|h| format!("{}/.gshellrc", h)).unwrap_or_default()
+        });
+        if rcfile.is_empty() {
+            return;
+        }
+        let contents = match std::fs::read_to_string(&rcfile) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        for line in contents.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let command = self.process_heredocs(trimmed);
+            let mut tokens = tokenize(&command);
+            if tokens.is_empty() { continue; }
+            let _cmd = tokens.remove(0);
+            if command.contains("&&") || command.contains("||") {
+                self.last_exit_code = execute_and_or_list(&command, &[], self.last_exit_code);
+            } else if command.contains('|') {
+                self.last_exit_code = pipeline::execute_pipeline(&command, &[], self.last_exit_code);
+            } else {
+                self.last_exit_code = process_command(&command, self.last_exit_code);
+            }
+        }
     }
 
     fn run_loop(&mut self) -> rustyline::Result<()> {
