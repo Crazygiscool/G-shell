@@ -25,6 +25,13 @@ A POSIX-compliant shell written in Rust — built from scratch as part of the
 
 - Rust 1.91+ (`rustup install 1.91 && rustup default 1.91`)
 
+### Arch Linux (AUR)
+
+```sh
+yay -S g-shell
+# or: paru -S g-shell
+```
+
 ### Via install.sh
 
 ```sh
