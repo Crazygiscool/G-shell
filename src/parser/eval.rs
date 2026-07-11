@@ -434,7 +434,7 @@ fn eval_if(if_cmd: &IfCommand, history_data: &[String], last_exit_code: i32) -> 
     }
 }
 
-fn eval_for(for_cmd: &ForCommand, history_data: &[String], last_exit_code: i32) -> i32 {
+fn eval_for(for_cmd: &ForCommand, history_data: &[String], _last_exit_code: i32) -> i32 {
     let mut code = 0;
     for word in &for_cmd.words {
         unsafe { std::env::set_var(&for_cmd.var, word); }
@@ -443,7 +443,7 @@ fn eval_for(for_cmd: &ForCommand, history_data: &[String], last_exit_code: i32) 
     code
 }
 
-fn eval_while(while_cmd: &WhileCommand, history_data: &[String], last_exit_code: i32) -> i32 {
+fn eval_while(while_cmd: &WhileCommand, history_data: &[String], _last_exit_code: i32) -> i32 {
     let mut code = 0;
     loop {
         let cond_code = eval_program(&while_cmd.condition, history_data, code);

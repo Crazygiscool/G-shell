@@ -114,18 +114,20 @@ impl Shell {
 
                     let expanded = expand_history(trimmed, &history_vec);
 
-                    let _ = self.rl.add_history_entry(&expanded);
+                    // Collect multi-line input for scripting constructs
+                    let full_input = self.collect_until_complete(&expanded);
+                    let full_trimmed = full_input.trim();
+                    if full_trimmed.is_empty() { continue; }
 
-                    let command = self.process_heredocs(&expanded);
+                    let history_line = full_trimmed.replace('\n', "; ");
+                    let _ = self.rl.add_history_entry(&history_line);
+
+                    let command = self.process_heredocs(full_trimmed);
                     let tokens = tokenize(&command);
                     if tokens.is_empty() { continue; }
 
-                    // Check for history command with flags (needs special shell-level handling)
+                    // Check for history command with flags
                     if self.check_simple_history(&tokens).is_some() {
-                        let history_vec: Vec<String> = self.rl.history()
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect();
                         let args: Vec<String> = tokens.iter().skip(1).map(|t| t.value.clone()).collect();
                         match history_cmd(&history_vec, &args, &self.history_file) {
                             HistoryAction::Load(path) => {
@@ -165,6 +167,23 @@ impl Shell {
             }
         }
         Ok(())
+    }
+
+    fn collect_until_complete(&mut self, first: &str) -> String {
+        let mut buffer = first.to_string();
+        loop {
+            let tokens = tokenize(&buffer);
+            if input_is_complete(&tokens) {
+                return buffer;
+            }
+            match self.rl.readline("> ") {
+                Ok(line) => {
+                    buffer.push('\n');
+                    buffer.push_str(&line);
+                }
+                Err(_) => return buffer,
+            }
+        }
     }
 
     fn check_simple_history(&self, tokens: &[crate::parser::ast::Token]) -> Option<bool> {
@@ -283,6 +302,21 @@ impl Shell {
         writer.flush()?;
         Ok(())
     }
+}
+
+fn input_is_complete(tokens: &[crate::parser::ast::Token]) -> bool {
+    let mut depth: i32 = 0;
+    for token in tokens {
+        if token.kind != crate::parser::ast::TokenKind::Word {
+            continue;
+        }
+        match token.value.as_str() {
+            "if" | "for" | "while" | "case" => depth += 1,
+            "fi" | "done" | "esac" => depth -= 1,
+            _ => {}
+        }
+    }
+    depth <= 0
 }
 
 fn expand_history(input: &str, history: &[String]) -> String {
