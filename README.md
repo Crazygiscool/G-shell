@@ -25,6 +25,14 @@ A POSIX-compliant shell written in Rust — built from scratch as part of the
 
 - Rust 1.91+ (`rustup install 1.91 && rustup default 1.91`)
 
+### One-liner (curl | sh)
+
+```sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/Crazygiscool/G-shell/main/install.sh)"
+```
+
+Downloads and runs `install.sh` — builds the release binary and installs to `~/.local/bin`.
+
 ### Arch Linux (AUR)
 
 ```sh
@@ -32,16 +40,17 @@ yay -S g-shell
 # or: paru -S g-shell
 ```
 
-### Via install.sh
+Builds from source. Requires `base-devel` and `cargo`.
+
+### Via install.sh (manual)
 
 ```sh
 git clone https://github.com/Crazygiscool/G-shell
 cd G-shell
 chmod +x install.sh
-./install.sh
+./install.sh               # installs to ~/.local/bin
+./install.sh /usr/local/bin  # custom path
 ```
-
-Installs to `~/.local/bin/g-shell` (or a custom path: `./install.sh /usr/local/bin`).
 
 ### Via cargo
 
