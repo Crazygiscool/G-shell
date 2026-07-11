@@ -13,12 +13,14 @@ alias ..='cd ..'
 alias ...='cd ../..'
 alias cl='clear'
 
-# Prompt
-# Legacy PS1 (backslash escapes):
-#   export PS1='\w \$ '
-# Theme format (GS_PROMPT_FORMAT — {user} {host} {path} {git} {exit} {time} {root} {prompt} {newline}):
-#   export GS_PROMPT_FORMAT='{user}@{host}:{path}{git}{exit} $ '
-# Style segments with GS_STYLE_<NAME> env var (e.g., GS_STYLE_PATH="cyan bold"):
+# Prompt — default theme (set GS_PROMPT_FORMAT to customize)
+# {user} {host} {path} {git} {exit} {time} {root} {prompt} {newline}
+export GS_PROMPT_FORMAT='{user}@{host}:{path}{git}{exit} {prompt} '
+export GS_STYLE_USER="green bold"
+export GS_STYLE_HOST="green"
+export GS_STYLE_PATH="cyan bold"
+export GS_STYLE_GIT="yellow"
+export GS_STYLE_EXIT="red"
 export PS1='\w \$ '
 
 # History
