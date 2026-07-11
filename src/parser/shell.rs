@@ -5,6 +5,7 @@ use crate::parser::helper::ShellHelper;
 use crate::parser::{pipeline, tokenize::tokenize};
 use crate::commands::history::{history as history_cmd, HistoryAction};
 use crate::parser::process::process_command;
+use crate::parser::expand::expand_prompt;
 use std::fs::{File, OpenOptions};
 use crate::parser::pathcache;
 use std::os::unix::process::CommandExt;
@@ -101,7 +102,7 @@ impl Shell {
 
     fn run_loop(&mut self) -> rustyline::Result<()> {
         loop {
-            let prompt = env::var("PS1").unwrap_or_else(|_| "$ ".to_string());
+            let prompt = expand_prompt(&env::var("PS1").unwrap_or_else(|_| "$ ".to_string()));
             let readline = self.rl.readline(&prompt);
 
             match readline {
