@@ -95,7 +95,7 @@ impl Shell {
 
     fn run_loop(&mut self) -> rustyline::Result<()> {
         loop {
-            let prompt = expand_prompt(&env::var("PS1").unwrap_or_else(|_| "$ ".to_string()));
+            let prompt = expand_prompt(&env::var("PS1").unwrap_or_else(|_| "$ ".to_string()), self.last_exit_code);
             let readline = self.rl.readline(&prompt);
 
             match readline {

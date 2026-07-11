@@ -139,50 +139,17 @@ fn expand_var(name: &str) -> String {
     env::var(name).unwrap_or_default()
 }
 
-pub fn expand_prompt(template: &str) -> String {
-    let pwd = env::current_dir().ok();
-    let cwd = pwd.as_deref().and_then(|p| p.to_str()).unwrap_or("?");
-    let cwd_basename = pwd.as_ref().and_then(|p| p.file_name().and_then(|n| n.to_str())).unwrap_or("?");
-    let home = env::var("HOME").ok();
-    let w = match home {
-        Some(ref home) if cwd.starts_with(home) => "~".to_string() + &cwd[home.len()..],
-        _ => cwd.to_string(),
-    };
-    let user = env::var("USER").unwrap_or_else(|_| "?".to_string());
-    let host = env::var("HOSTNAME").ok().or_else(|| {
-        std::process::Command::new("hostname").arg("-s").output().ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok().map(|x| x.trim().to_string()))
-    }).unwrap_or_else(|| "?".to_string());
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let sec = now.as_secs() % 86400;
-    let h = sec / 3600;
-    let m = sec / 60 % 60;
-    let s = sec % 60;
-    let t = format!("{:02}:{:02}:{:02}", h, m, s);
-
-    let mut result = String::new();
-    let mut chars = template.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('w') => result.push_str(&w),
-                Some('W') => result.push_str(cwd_basename),
-                Some('u') => result.push_str(&user),
-                Some('h') => result.push_str(&host),
-                Some('$') => result.push(if user == "root" { '#' } else { '$' }),
-                Some('t') => result.push_str(&t),
-                Some('e') => result.push('\x1b'),
-                Some(other) => {
-                    result.push('\\');
-                    result.push(other);
-                },
-                None => result.push('\\'),
-            }
-        } else {
-            result.push(c);
+pub fn expand_prompt(template: &str, last_exit_code: i32) -> String {
+    // Check for oh-my-posh theme first
+    if let Ok(path) = env::var("GS_OH_MY_POSH_THEME") {
+        if let Some(format_str) = crate::parser::theme::load_omp_theme(&path) {
+            return crate::parser::theme::render_prompt(&format_str, last_exit_code);
         }
     }
-    result
+    // Check for GS_PROMPT_FORMAT
+    if let Ok(format) = env::var("GS_PROMPT_FORMAT") {
+        return crate::parser::theme::render_prompt(&format, last_exit_code);
+    }
+    // Fall back to legacy PS1 with backslash escapes + segment placeholders
+    crate::parser::theme::render_prompt(template, last_exit_code)
 }
