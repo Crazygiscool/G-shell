@@ -2,13 +2,13 @@ use rustyline::config::{BellStyle, CompletionType};
 use rustyline::{Config, Editor};
 use rustyline::history::{FileHistory, History};
 use crate::parser::helper::ShellHelper;
-use crate::parser::{pipeline, tokenize::tokenize_strings as tokenize};
+use crate::parser::tokenize::tokenize;
+use crate::parser::ast::{TokenKind, Program, CompleteCommand, CommandNode};
+use crate::parser::{parser, eval};
 use crate::commands::history::{history as history_cmd, HistoryAction};
-use crate::parser::process::process_command;
 use crate::parser::expand::expand_prompt;
 use std::fs::{File, OpenOptions};
 use crate::parser::pathcache;
-use std::os::unix::process::CommandExt;
 use std::io::{BufWriter, Write};
 use std::env;
 
@@ -67,7 +67,6 @@ impl Shell {
 
     fn source_rcfile(&mut self) {
         let rcfile = env::var("GSHELLRC").unwrap_or_else(|_| {
-            // Check CWD first, then $HOME
             let cwd_path = ".gshellrc";
             if std::path::Path::new(cwd_path).exists() {
                 return cwd_path.to_string();
@@ -87,16 +86,10 @@ impl Shell {
                 continue;
             }
             let command = self.process_heredocs(trimmed);
-            let mut tokens = tokenize(&command);
+            let tokens = tokenize(&command);
             if tokens.is_empty() { continue; }
-            let _cmd = tokens.remove(0);
-            if command.contains("&&") || command.contains("||") {
-                self.last_exit_code = execute_and_or_list(&command, &[], self.last_exit_code);
-            } else if command.contains('|') {
-                self.last_exit_code = pipeline::execute_pipeline(&command, &[], self.last_exit_code);
-            } else {
-                self.last_exit_code = process_command(&command, self.last_exit_code);
-            }
+            let program = parser::parse(&tokens);
+            self.last_exit_code = eval::eval_program(&program, &[], self.last_exit_code);
         }
     }
 
@@ -123,25 +116,48 @@ impl Shell {
 
                     let _ = self.rl.add_history_entry(&expanded);
 
-                    let commands: Vec<&str> = expanded.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                    let command = self.process_heredocs(&expanded);
+                    let tokens = tokenize(&command);
+                    if tokens.is_empty() { continue; }
 
-                    for command in commands {
-                        if command == "exit" {
-                            return Ok(());
+                    // Check for history command with flags (needs special shell-level handling)
+                    if self.check_simple_history(&tokens).is_some() {
+                        let history_vec: Vec<String> = self.rl.history()
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect();
+                        let args: Vec<String> = tokens.iter().skip(1).map(|t| t.value.clone()).collect();
+                        match history_cmd(&history_vec, &args, &self.history_file) {
+                            HistoryAction::Load(path) => {
+                                if let Err(_) = self.rl.load_history(&path) {
+                                    eprintln!("history: {}: No such file or directory", path);
+                                }
+                                self.history_start_index = self.rl.history().len();
+                            }
+                            HistoryAction::Write(path) => {
+                                let _ = self.save_history_plain(&path, false);
+                            }
+                            HistoryAction::Append(path) => {
+                                let _ = self.save_history_plain(&path, true);
+                                self.history_start_index = self.rl.history().len();
+                            }
+                            HistoryAction::Clear => {
+                                let _ = self.rl.clear_history();
+                                self.history_start_index = 0;
+                            }
+                            HistoryAction::None => {}
                         }
+                        continue;
+                    }
 
-                        // Check for & (background)
-                        let (cmd, bg) = if command.ends_with('&') {
-                            let c = command[..command.len()-1].trim();
-                            (c, true)
-                        } else {
-                            (command, false)
-                        };
+                    let program = parser::parse(&tokens);
 
-                        if bg {
-                            self.execute_background(cmd, &history_vec);
+                    for complete_cmd in &program.commands {
+                        if complete_cmd.background {
+                            self.execute_background_ast(complete_cmd);
                         } else {
-                            self.execute_foreground(cmd, &history_vec);
+                            let single = Program { commands: vec![complete_cmd.clone()] };
+                            self.last_exit_code = eval::eval_program(&single, &history_vec, self.last_exit_code);
                         }
                     }
                 }
@@ -151,75 +167,54 @@ impl Shell {
         Ok(())
     }
 
-    fn execute_foreground(&mut self, command: &str, history_data: &[String]) {
-        let command = self.process_heredocs(command);
-        let mut tokens = tokenize(&command);
-        if tokens.is_empty() { return; }
-        let cmd = tokens.remove(0);
-
-        match cmd.as_str() {
-            "history" => {
-                match history_cmd(history_data, &tokens, &self.history_file) {
-                    HistoryAction::Load(path) => {
-                        if let Err(_) = self.rl.load_history(&path) {
-                            eprintln!("history: {}: No such file or directory", path);
-                        }
-                        self.history_start_index = self.rl.history().len();
-                    }
-                    HistoryAction::Write(path) => {
-                        let _ = self.save_history_plain(&path, false);
-                    }
-                    HistoryAction::Append(path) => {
-                        let _ = self.save_history_plain(&path, true);
-                        self.history_start_index = self.rl.history().len();
-                    }
-                    HistoryAction::Clear => {
-                        let _ = self.rl.clear_history();
-                        self.history_start_index = 0;
-                    }
-                    HistoryAction::None => {}
-                }
-            }
-            _ => {
-                if command.contains("&&") || command.contains("||") {
-                    self.last_exit_code = execute_and_or_list(&command, history_data, self.last_exit_code);
-                } else if command.contains('|') {
-                    self.last_exit_code = pipeline::execute_pipeline(&command, history_data, self.last_exit_code);
-                } else {
-                    self.last_exit_code = process_command(&command, self.last_exit_code);
-                }
-            }
+    fn check_simple_history(&self, tokens: &[crate::parser::ast::Token]) -> Option<bool> {
+        if tokens.len() >= 1
+            && tokens[0].kind == TokenKind::Word
+            && tokens[0].value == "history"
+            && tokens.iter().all(|t| t.kind == TokenKind::Word)
+        {
+            Some(true)
+        } else {
+            None
         }
     }
 
-    fn execute_background(&mut self, command: &str, _history_data: &[String]) {
+    fn execute_background_ast(&mut self, cmd: &CompleteCommand) {
         use std::process::{Command, Stdio};
+        use std::os::unix::process::CommandExt;
 
-        let tokens = tokenize(command);
-        if tokens.is_empty() { return; }
-        let program = tokens[0].clone();
-        let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
+        if let Some(node) = cmd.and_or.nodes.first() {
+            if let CommandNode::Pipeable(pipeline) = &node.command {
+                if pipeline.commands.len() == 1 && !pipeline.negated {
+                    let simple = &pipeline.commands[0];
+                    if simple.words.is_empty() { return; }
 
-        if let Some(path) = pathcache::find_in_path_cache(&program) {
-            match Command::new(&path)
-                .arg0(&program)
-                .args(&args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .spawn()
-            {
-                Ok(child) => {
-                    let pid = child.id();
-                    println!("[{}] {}", pid, command);
-                    let _ = child; // don't wait — let init reap it
-                }
-                Err(e) => {
-                    eprintln!("{}: {}", program, e);
+                    let program = &simple.words[0];
+                    let args: Vec<&str> = simple.words.iter().skip(1).map(|s| s.as_str()).collect();
+
+                    if let Some(path) = pathcache::find_in_path_cache(program) {
+                        match Command::new(&path)
+                            .arg0(program)
+                            .args(&args)
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::inherit())
+                            .stderr(Stdio::inherit())
+                            .spawn()
+                        {
+                            Ok(child) => {
+                                let pid = child.id();
+                                eprintln!("[{}] {}", pid, program);
+                                let _ = child;
+                            }
+                            Err(e) => {
+                                eprintln!("{}: {}", program, e);
+                            }
+                        }
+                    } else {
+                        eprintln!("{}: command not found", program);
+                    }
                 }
             }
-        } else {
-            eprintln!("{}: command not found", program);
         }
     }
 
@@ -287,58 +282,6 @@ impl Shell {
         }
         writer.flush()?;
         Ok(())
-    }
-}
-
-fn execute_and_or_list(command: &str, history_data: &[String], last_exit_code: i32) -> i32 {
-    let mut code = 0;
-    let mut remaining = command;
-    let mut expect_success = true;
-
-    loop {
-        let rest = remaining.trim();
-        if rest.is_empty() { break; }
-
-        if expect_success {
-            if let Some(pos) = rest.find("&&") {
-                let cmd = &rest[..pos].trim();
-                code = execute_single(cmd, history_data, last_exit_code);
-                remaining = &rest[pos + 2..];
-                expect_success = code == 0;
-            } else if let Some(pos) = rest.find("||") {
-                let cmd = &rest[..pos].trim();
-                code = execute_single(cmd, history_data, last_exit_code);
-                remaining = &rest[pos + 2..];
-                expect_success = code == 0;
-            } else {
-                code = execute_single(rest, history_data, last_exit_code);
-                break;
-            }
-        } else {
-            if let Some(pos) = rest.find("||") {
-                let cmd = &rest[..pos].trim();
-                code = execute_single(cmd, history_data, last_exit_code);
-                remaining = &rest[pos + 2..];
-                expect_success = code == 0;
-            } else if let Some(pos) = rest.find("&&") {
-                let cmd = &rest[..pos].trim();
-                code = execute_single(cmd, history_data, last_exit_code);
-                remaining = &rest[pos + 2..];
-                expect_success = code == 0;
-            } else {
-                break;
-            }
-        }
-    }
-
-    code
-}
-
-fn execute_single(cmd: &str, history_data: &[String], last_exit_code: i32) -> i32 {
-    if cmd.contains('|') {
-        pipeline::execute_pipeline(cmd, history_data, last_exit_code)
-    } else {
-        process_command(cmd, last_exit_code)
     }
 }
 

@@ -4,7 +4,7 @@ use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper, Result};
 use crate::parser::tab::{complete_command, complete_path, complete_variable};
-use crate::parser::tokenize::tokenize_strings as tokenize;
+use crate::parser::tokenize::tokenize;
 
 #[derive(Clone, Copy)]
 pub struct ShellHelper;
@@ -36,7 +36,7 @@ impl Completer for ShellHelper {
         let last_word = if buf.ends_with(' ') || tokens.is_empty() {
             ""
         } else {
-            tokens.last().map(|s| s.as_str()).unwrap_or("")
+            tokens.last().map(|t| t.value.as_str()).unwrap_or("")
         };
 
         let start_pos = if last_word.is_empty() {
