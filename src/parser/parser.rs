@@ -94,11 +94,11 @@ impl<'a> Parser<'a> {
         if let Some(token) = self.peek() {
             if token.kind == TokenKind::Word {
                 match token.value.as_str() {
-                    "if" => return CommandNode::Compound(ScriptCommand::If(self.parse_if())),
-                    "for" => return CommandNode::Compound(ScriptCommand::For(self.parse_for())),
-                    "while" => return CommandNode::Compound(ScriptCommand::While(self.parse_while())),
-                    "case" => return CommandNode::Compound(ScriptCommand::Case(self.parse_case())),
-                    "function" => return CommandNode::Compound(ScriptCommand::Function(self.parse_function())),
+                    "if" => { self.advance(); return CommandNode::Compound(ScriptCommand::If(self.parse_if())); }
+                    "for" => { self.advance(); return CommandNode::Compound(ScriptCommand::For(self.parse_for())); }
+                    "while" => { self.advance(); return CommandNode::Compound(ScriptCommand::While(self.parse_while())); }
+                    "case" => { self.advance(); return CommandNode::Compound(ScriptCommand::Case(self.parse_case())); }
+                    "function" => { self.advance(); return CommandNode::Compound(ScriptCommand::Function(self.parse_function())); }
                     _ => {}
                 }
             }
@@ -276,9 +276,10 @@ impl<'a> Parser<'a> {
             let patterns = self.parse_case_patterns();
             self.expect(TokenKind::RParen);
             let body = self.parse_compound_list();
-            // Optional ;; or ;
-            self.expect(TokenKind::Semicolon);
-            self.expect(TokenKind::Semicolon); // some use ;;
+            // ;; or ;
+            if !self.expect(TokenKind::DSemicolon).is_some() {
+                self.expect(TokenKind::Semicolon);
+            }
 
             items.push(CaseItem { patterns, body });
         }
@@ -340,13 +341,14 @@ impl<'a> Parser<'a> {
 
     fn check_terminator(&self) -> bool {
         self.peek().is_some_and(|t| {
-            t.kind == TokenKind::Word && matches!(
-                t.value.as_str(),
-                "then" | "else" | "elif" | "fi"
-                    | "do" | "done"
-                    | "esac"
-                    | "}"
-            )
+            t.kind == TokenKind::DSemicolon
+                || (t.kind == TokenKind::Word && matches!(
+                    t.value.as_str(),
+                    "then" | "else" | "elif" | "fi"
+                        | "do" | "done"
+                        | "esac"
+                        | "}"
+                ))
         })
     }
 

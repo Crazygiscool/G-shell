@@ -19,13 +19,11 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             // SINGLE QUOTES
             '\'' if !in_double => {
                 in_single = !in_single;
-                cur.push(c);
             }
 
             // DOUBLE QUOTES
             '"' if !in_single => {
                 in_double = !in_double;
-                cur.push(c);
             }
 
             // BACKSLASH HANDLING
@@ -148,7 +146,12 @@ pub fn tokenize(input: &str) -> Vec<Token> {
 
             ';' if !in_single && !in_double => {
                 flush_word(&mut cur, &mut tokens);
-                tokens.push(Token::new(TokenKind::Semicolon, ";"));
+                if let Some(';') = chars.peek() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::DSemicolon, ";;"));
+                } else {
+                    tokens.push(Token::new(TokenKind::Semicolon, ";"));
+                }
             }
 
             '!' if !in_single && !in_double => {

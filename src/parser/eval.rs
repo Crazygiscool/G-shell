@@ -208,7 +208,10 @@ fn eval_simple_command(
     let saved_fds: Vec<(i32, RawFd)> = apply_redirects(&cmd.redirects);
 
     let expanded = expand_and_glob(&cmd.words, last_exit_code);
-    let code = if expanded.is_empty() {
+    let is_pure_assignment = expanded.is_empty() && !cmd.env_overrides.is_empty();
+    let code = if is_pure_assignment {
+        0
+    } else if expanded.is_empty() {
         0
     } else {
         let program = &expanded[0];
@@ -221,11 +224,13 @@ fn eval_simple_command(
         restore_fd(saved_fd, target);
     }
 
-    // Restore env overrides
-    for (name, old) in originals.into_iter().rev() {
-        match old {
-            Some(v) => unsafe { std::env::set_var(&name, v); },
-            None => unsafe { std::env::remove_var(&name); },
+    // Restore env overrides (skip for pure assignment — persist in shell)
+    if !is_pure_assignment {
+        for (name, old) in originals.into_iter().rev() {
+            match old {
+                Some(v) => unsafe { std::env::set_var(&name, v); },
+                None => unsafe { std::env::remove_var(&name); },
+            }
         }
     }
 

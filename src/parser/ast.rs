@@ -7,6 +7,7 @@ pub enum TokenKind {
     AndIf,
     OrIf,
     Semicolon,
+    DSemicolon,
     Background,
     Bang,
     LParen,
