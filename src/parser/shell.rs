@@ -2,7 +2,7 @@ use rustyline::config::{BellStyle, CompletionType};
 use rustyline::{Config, Editor};
 use rustyline::history::{FileHistory, History};
 use crate::parser::helper::ShellHelper;
-use crate::parser::{pipeline, tokenize::tokenize};
+use crate::parser::{pipeline, tokenize::tokenize_strings as tokenize};
 use crate::commands::history::{history as history_cmd, HistoryAction};
 use crate::parser::process::process_command;
 use crate::parser::expand::expand_prompt;
@@ -224,7 +224,7 @@ impl Shell {
     }
 
     fn process_heredocs(&mut self, command: &str) -> String {
-        let tokens: Vec<String> = crate::parser::tokenize::tokenize(command);
+        let tokens: Vec<String> = crate::parser::tokenize::tokenize_strings(command);
         let heredoc_pos = tokens.iter().position(|t| t == "<<" || t.ends_with("<<"));
         match heredoc_pos {
             None => command.to_string(),

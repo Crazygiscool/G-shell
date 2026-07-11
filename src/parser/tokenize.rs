@@ -1,127 +1,181 @@
-pub fn tokenize(input: &str) -> Vec<String> {
-        let mut tokens = Vec::new();
-        let mut cur = String::new();
+use crate::parser::ast::{Token, TokenKind};
 
-        let mut chars = input.chars().peekable();
-        let mut in_single = false;
-        let mut in_double = false;
+pub fn tokenize(input: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
 
-        while let Some(c) = chars.next() {
-            match c {
-                // SINGLE QUOTES
-                '\'' if !in_double => {
-                    in_single = !in_single;
-                }
+    let mut chars = input.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
 
-                // DOUBLE QUOTES
-                '"' if !in_single => {
-                    in_double = !in_double;
-                }
-
-                // BACKSLASH HANDLING
-                '\\' => {
-                    if in_single {
-                        cur.push('\\');
-                    } else if in_double {
-                        match chars.next() {
-                            Some('"') => cur.push('"'),
-                            Some('\\') => cur.push('\\'),
-                            Some('$') => cur.push('$'),
-                            Some('`') => cur.push('`'),
-                            Some('\n') => { /* line continuation */ }
-                            Some(ch) => {
-                                cur.push('\\');
-                                cur.push(ch);
-                            }
-                            None => cur.push('\\'),
-                        }
-                    } else {
-                        match chars.next() {
-                            Some('\n') => { /* line continuation */ }
-                            Some(ch) => cur.push(ch),
-                            None => cur.push('\\'),
-                        }
-                    }
-                }
-
-                // COMMENTS
-                '#' if !in_single && !in_double && cur.is_empty() => {
-                    break;
-                }
-
-                // WHITESPACE SPLITTING
-                c if c.is_whitespace() && !in_single && !in_double => {
-                    if !cur.is_empty() {
-                        tokens.push(cur);
-                        cur = String::new();
-                    }
-                }
-
-                // FD REDIRECTION (e.g., 1>, 1>>, 2>, 2>>)
-                c if !in_single && !in_double && c.is_ascii_digit() => {
-                    let mut op = String::new();
-                    op.push(c);
-                    if let Some('>') = chars.peek().copied() {
-                        chars.next();
-                        op.push('>');
-                        // check for >>
-                        if let Some('>') = chars.peek().copied() {
-                            chars.next();
-                            op.push('>');
-                        }
-                    } else if let Some('<') = chars.peek().copied() {
-                        chars.next();
-                        op.push('<');
-                        if let Some('<') = chars.peek().copied() {
-                            chars.next();
-                            op.push('<');
-                        }
-                    } else {
-                        cur.push(c);
-                        continue;
-                    }
-                    if !cur.is_empty() {
-                        tokens.push(cur.clone());
-                        cur.clear();
-                    }
-                    tokens.push(op);
-                }
-
-                // REDIRECTION OPERATORS: ">", ">>", "<"
-                '>' if !in_single && !in_double => {
-                    if !cur.is_empty() {
-                        tokens.push(cur.clone());
-                        cur.clear();
-                    }
-                    if let Some('>') = chars.peek().copied() {
-                        chars.next();
-                        tokens.push(">>".to_string());
-                    } else {
-                        tokens.push(">".to_string());
-                    }
-                }
-
-                '<' if !in_single && !in_double => {
-                    if !cur.is_empty() {
-                        tokens.push(cur.clone());
-                        cur.clear();
-                    }
-                    if let Some('<') = chars.peek() {
-                        chars.next();
-                        tokens.push("<<".to_string());
-                    } else {
-                        tokens.push("<".to_string());
-                    }
-                }
-
-                // NORMAL CHARACTER
-                _ => cur.push(c),
-            }
-        }
-
+    let flush_word = |cur: &mut String, tokens: &mut Vec<Token>| {
         if !cur.is_empty() {
-            tokens.push(cur);
+            tokens.push(Token::new(TokenKind::Word, std::mem::take(cur)));
         }
+    };
 
-        tokens
+    while let Some(c) = chars.next() {
+        match c {
+            // SINGLE QUOTES
+            '\'' if !in_double => {
+                in_single = !in_single;
+                cur.push(c);
+            }
+
+            // DOUBLE QUOTES
+            '"' if !in_single => {
+                in_double = !in_double;
+                cur.push(c);
+            }
+
+            // BACKSLASH HANDLING
+            '\\' => {
+                if in_single {
+                    cur.push('\\');
+                } else if in_double {
+                    match chars.next() {
+                        Some('"') => { cur.push('"'); }
+                        Some('\\') => { cur.push('\\'); }
+                        Some('$') => { cur.push('$'); }
+                        Some('`') => { cur.push('`'); }
+                        Some('\n') => { /* line continuation */ }
+                        Some(ch) => {
+                            cur.push('\\');
+                            cur.push(ch);
+                        }
+                        None => cur.push('\\'),
+                    }
+                } else {
+                    match chars.next() {
+                        Some('\n') => { /* line continuation */ }
+                        Some(ch) => cur.push(ch),
+                        None => cur.push('\\'),
+                    }
+                }
+            }
+
+            // COMMENTS
+            '#' if !in_single && !in_double && cur.is_empty() => {
+                break;
+            }
+
+            // WHITESPACE SPLITTING
+            c if c.is_whitespace() && !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+            }
+
+            // FD REDIRECTION (e.g., 1>, 1>>, 2>, 2>>, 0<)
+            c if !in_single && !in_double && c.is_ascii_digit() => {
+                let mut op = String::new();
+                op.push(c);
+                if let Some('>') = chars.peek().copied() {
+                    chars.next();
+                    let kind = if chars.peek() == Some(&'>') {
+                        chars.next();
+                        op.push_str(">>");
+                        TokenKind::DGreat
+                    } else {
+                        op.push('>');
+                        TokenKind::Great
+                    };
+                    flush_word(&mut cur, &mut tokens);
+                    tokens.push(Token::new(kind, op));
+                } else if let Some('<') = chars.peek().copied() {
+                    chars.next();
+                    let kind = if chars.peek() == Some(&'<') {
+                        chars.next();
+                        op.push_str("<<");
+                        TokenKind::DLass
+                    } else {
+                        op.push('<');
+                        TokenKind::Less
+                    };
+                    flush_word(&mut cur, &mut tokens);
+                    tokens.push(Token::new(kind, op));
+                } else {
+                    cur.push(c);
+                }
+            }
+
+            // REDIRECTION OPERATORS: ">", ">>"
+            '>' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                if let Some('>') = chars.peek().copied() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::DGreat, ">>"));
+                } else if let Some('&') = chars.peek().copied() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::Great, ">&"));
+                } else {
+                    tokens.push(Token::new(TokenKind::Great, ">"));
+                }
+            }
+
+            // REDIRECTION OPERATORS: "<", "<<"
+            '<' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                if let Some('<') = chars.peek() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::DLass, "<<"));
+                } else if let Some('&') = chars.peek().copied() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::Less, "<&"));
+                } else {
+                    tokens.push(Token::new(TokenKind::Less, "<"));
+                }
+            }
+
+            // CONTROL OPERATORS
+            '|' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                if let Some('|') = chars.peek() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::OrIf, "||"));
+                } else {
+                    tokens.push(Token::new(TokenKind::Pipe, "|"));
+                }
+            }
+
+            '&' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                if let Some('&') = chars.peek() {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::AndIf, "&&"));
+                } else {
+                    tokens.push(Token::new(TokenKind::Background, "&"));
+                }
+            }
+
+            ';' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                tokens.push(Token::new(TokenKind::Semicolon, ";"));
+            }
+
+            '!' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                tokens.push(Token::new(TokenKind::Bang, "!"));
+            }
+
+            '(' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                tokens.push(Token::new(TokenKind::LParen, "("));
+            }
+
+            ')' if !in_single && !in_double => {
+                flush_word(&mut cur, &mut tokens);
+                tokens.push(Token::new(TokenKind::RParen, ")"));
+            }
+
+            // NORMAL CHARACTER
+            _ => cur.push(c),
+        }
     }
+
+    flush_word(&mut cur, &mut tokens);
+    tokens
+}
+
+/// Compatibility shim: returns string values for code that hasn't migrated yet
+pub fn tokenize_strings(input: &str) -> Vec<String> {
+    tokenize(input).into_iter().map(|t| t.value).collect()
+}

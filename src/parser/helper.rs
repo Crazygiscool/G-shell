@@ -4,7 +4,7 @@ use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
 use rustyline::{Context, Helper, Result};
 use crate::parser::tab::{complete_command, complete_path, complete_variable};
-use crate::parser::tokenize::tokenize;
+use crate::parser::tokenize::tokenize_strings as tokenize;
 
 #[derive(Clone, Copy)]
 pub struct ShellHelper;

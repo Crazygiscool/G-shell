@@ -1,6 +1,6 @@
 use std::os::unix::io::RawFd;
 
-use crate::parser::tokenize::tokenize;
+use crate::parser::tokenize::tokenize_strings as tokenize;
 use crate::parser::expand::expand_tokens;
 use crate::parser::glob::expand_globs;
 use crate::parser::redirect_stdout::{

@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use os_pipe::pipe;
-use crate::parser::tokenize::tokenize;
+use crate::parser::tokenize::tokenize_strings as tokenize;
 use crate::parser::expand::expand_tokens;
 use crate::parser::glob::expand_globs;
 
