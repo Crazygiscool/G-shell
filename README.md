@@ -1,5 +1,5 @@
 # G-Shell
-[![wakatime](https://wakatime.com/badge/user/94726172-a5c4-4c20-b247-f01d1fc63010/project/11a3f801-4af9-49a7-9566-f933b90315ae.svg)](https://wakatime.com/badge/user/94726172-a5c4-4c20-b247-f01d1fc63010/project/11a3f801-4af9-49a7-9566-f933b90315ae)
+[![wakatime](https://wakatime.com/badge/user/94726172-a5c4-4c20-b247-f01d1fc63010/project/0ff641ee-e030-4c89-b8fc-c9c25549539b.svg)](https://wakatime.com/badge/user/94726172-a5c4-4c20-b247-f01d1fc63010/project/0ff641ee-e030-4c89-b8fc-c9c25549539b)
 
 A POSIX-compliant shell written in Rust — built from scratch as part of the
 [CodeCrafters "Build Your Own Shell"](https://app.codecrafters.io/courses/shell/overview) challenge.
