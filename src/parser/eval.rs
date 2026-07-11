@@ -10,7 +10,7 @@ use crate::parser::redirect_stdout::{
     redirect_stdin_from, restore_fd,
 };
 use crate::parser::expand::expand_tokens;
-use crate::parser::glob::expand_globs;
+use crate::parser::glob::{expand_globs, glob_match};
 use crate::parser::pathcache;
 use crate::commands::{echo, cd, pwd, r#type, env, test, help};
 
@@ -473,10 +473,7 @@ fn eval_case(case_cmd: &CaseCommand, history_data: &[String], last_exit_code: i3
 }
 
 fn glob_match_simple(pattern: &str, text: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    pattern == text
+    glob_match(pattern, text)
 }
 
 // ── Redirect helpers ──
@@ -569,6 +566,329 @@ fn run_builtin(name: &str, args: &[&str], history_data: &[String], last_exit_cod
     let code = run_command(name, args, &[], None, history_data, last_exit_code);
     std::io::Write::flush(&mut std::io::stdout()).ok();
     code
+}
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── Helpers ───
+
+    fn sc(words: &[&str]) -> SimpleCommand {
+        SimpleCommand { env_overrides: vec![], words: words.iter().map(|s| s.to_string()).collect(), redirects: vec![] }
+    }
+
+    fn sc_env(env: &[(&str, &str)], words: &[&str]) -> SimpleCommand {
+        SimpleCommand {
+            env_overrides: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            words: words.iter().map(|s| s.to_string()).collect(),
+            redirects: vec![],
+        }
+    }
+
+    fn pipeable(negated: bool, cmds: Vec<SimpleCommand>) -> CommandNode {
+        CommandNode::Pipeable(Pipeline { negated, commands: cmds })
+    }
+
+    fn compound(sc: ScriptCommand) -> CommandNode {
+        CommandNode::Compound(sc)
+    }
+
+    fn complete(cmd: CommandNode) -> CompleteCommand {
+        CompleteCommand {
+            and_or: AndOrList { nodes: vec![AndOrNode { command: cmd, operator: None }] },
+            background: false,
+        }
+    }
+
+    fn program(commands: Vec<CompleteCommand>) -> Program {
+        Program { commands }
+    }
+
+    // ─── is_builtin ───
+
+    #[test]
+    fn test_is_builtin_true() {
+        assert!(is_builtin("echo"));
+        assert!(is_builtin("cd"));
+        assert!(is_builtin("pwd"));
+        assert!(is_builtin("type"));
+        assert!(is_builtin("exit"));
+        assert!(is_builtin("history"));
+        assert!(is_builtin("export"));
+        assert!(is_builtin("unset"));
+        assert!(is_builtin("alias"));
+        assert!(is_builtin("unalias"));
+        assert!(is_builtin("source"));
+        assert!(is_builtin("help"));
+        assert!(is_builtin("test"));
+        assert!(is_builtin("["));
+        assert!(is_builtin("env"));
+        assert!(is_builtin("set"));
+    }
+
+    #[test]
+    fn test_is_builtin_false() {
+        assert!(!is_builtin("cat"));
+        assert!(!is_builtin("ls"));
+        assert!(!is_builtin("grep"));
+        assert!(!is_builtin("foobar"));
+    }
+
+    // ─── glob_match_simple ───
+
+    #[test]
+    fn test_glob_match_exact() {
+        assert!(glob_match_simple("hello", "hello"));
+    }
+
+    #[test]
+    fn test_glob_match_wildcard() {
+        assert!(glob_match_simple("h*", "hello"));
+        assert!(glob_match_simple("*o", "hello"));
+        assert!(glob_match_simple("*", "anything"));
+    }
+
+    #[test]
+    fn test_glob_match_question() {
+        assert!(glob_match_simple("h?llo", "hello"));
+        assert!(glob_match_simple("h???o", "hello"));
+    }
+
+    #[test]
+    fn test_glob_match_no_match() {
+        assert!(!glob_match_simple("hello", "world"));
+        assert!(!glob_match_simple("h*", "world"));
+    }
+
+    // ─── eval simple commands ───
+
+    #[test]
+    fn test_eval_true() {
+        let prog = program(vec![complete(pipeable(false, vec![sc(&["true"])]))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_eval_false() {
+        let prog = program(vec![complete(pipeable(false, vec![sc(&["false"])]))]);
+        assert_eq!(eval_program(&prog, &[], 0), 1);
+    }
+
+    #[test]
+    fn test_eval_echo() {
+        let prog = program(vec![complete(pipeable(false, vec![sc(&["echo", "hello"])]))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_eval_unknown_command() {
+        let prog = program(vec![complete(pipeable(false, vec![sc(&["nonexistent_cmd_xyz"])]))]);
+        assert_eq!(eval_program(&prog, &[], 0), 127);
+    }
+
+    // ─── eval AND/OR ───
+
+    #[test]
+    fn test_and_short_circuit() {
+        // false && echo nope  →  echo should NOT run (exit code = 1 from false)
+        // operator is on the node that follows &&
+        let prog = program(vec![CompleteCommand {
+            and_or: AndOrList {
+                nodes: vec![
+                    AndOrNode { command: pipeable(false, vec![sc(&["false"])]), operator: None },
+                    AndOrNode { command: pipeable(false, vec![sc(&["echo", "nope"])]), operator: Some(AndOrOp::And) },
+                ],
+            },
+            background: false,
+        }]);
+        assert_eq!(eval_program(&prog, &[], 0), 1);
+    }
+
+    #[test]
+    fn test_or_short_circuit() {
+        // true || echo nope  →  echo should NOT run (exit code = 0)
+        let prog = program(vec![CompleteCommand {
+            and_or: AndOrList {
+                nodes: vec![
+                    AndOrNode { command: pipeable(false, vec![sc(&["true"])]), operator: None },
+                    AndOrNode { command: pipeable(false, vec![sc(&["echo", "nope"])]), operator: Some(AndOrOp::Or) },
+                ],
+            },
+            background: false,
+        }]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_and_runs_when_true() {
+        // true && echo ok  →  echo runs (exit code = 0)
+        let prog = program(vec![CompleteCommand {
+            and_or: AndOrList {
+                nodes: vec![
+                    AndOrNode { command: pipeable(false, vec![sc(&["true"])]), operator: None },
+                    AndOrNode { command: pipeable(false, vec![sc(&["echo", "ok"])]), operator: Some(AndOrOp::And) },
+                ],
+            },
+            background: false,
+        }]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_or_runs_when_false() {
+        // false || echo ok  →  echo runs (exit code = 0)
+        let prog = program(vec![CompleteCommand {
+            and_or: AndOrList {
+                nodes: vec![
+                    AndOrNode { command: pipeable(false, vec![sc(&["false"])]), operator: None },
+                    AndOrNode { command: pipeable(false, vec![sc(&["echo", "ok"])]), operator: Some(AndOrOp::Or) },
+                ],
+            },
+            background: false,
+        }]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    // ─── eval pipelines ───
+
+    #[test]
+    fn test_pipeline_exit_code() {
+        let prog = program(vec![complete(pipeable(false, vec![sc(&["false"])]))]);
+        assert_eq!(eval_program(&prog, &[], 0), 1);
+    }
+
+    #[test]
+    fn test_pipeline_exit_code_last() {
+        // exit code comes from last command in pipeline
+        let prog = program(vec![complete(pipeable(false, vec![sc(&["true"]), sc(&["false"])]))]);
+        assert_eq!(eval_program(&prog, &[], 0), 1);
+    }
+
+    #[test]
+    fn test_pipeline_negated() {
+        let prog = program(vec![complete(pipeable(true, vec![sc(&["false"])]))]);
+        // ! false → exit 0
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    // ─── eval multiple commands ───
+
+    #[test]
+    fn test_semicolon_separator() {
+        let prog = program(vec![
+            complete(pipeable(false, vec![sc(&["true"])])),
+            complete(pipeable(false, vec![sc(&["echo", "ok"])])),
+        ]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    // ─── eval background ───
+
+    #[test]
+    fn test_background() {
+        let prog = Program { commands: vec![CompleteCommand {
+            and_or: AndOrList { nodes: vec![AndOrNode { command: pipeable(false, vec![sc(&["true"])]), operator: None }] },
+            background: true,
+        }]};
+        // background command should run and we don't wait — just check it doesn't crash
+        let code = eval_program(&prog, &[], 0);
+        assert!(code >= 0);
+    }
+
+    // ─── eval scripting: if ───
+
+    #[test]
+    fn test_eval_if_true() {
+        let cond = program(vec![complete(pipeable(false, vec![sc(&["true"])]))]);
+        let body = program(vec![complete(pipeable(false, vec![sc(&["echo", "yes"])]))]);
+        let prog = program(vec![complete(compound(ScriptCommand::If(IfCommand {
+            clauses: vec![IfClause { condition: cond, body }],
+            else_body: None,
+        })))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_eval_if_false() {
+        let cond = program(vec![complete(pipeable(false, vec![sc(&["false"])]))]);
+        let body = program(vec![complete(pipeable(false, vec![sc(&["echo", "yes"])]))]);
+        let else_body = program(vec![complete(pipeable(false, vec![sc(&["echo", "no"])]))]);
+        let prog = program(vec![complete(compound(ScriptCommand::If(IfCommand {
+            clauses: vec![IfClause { condition: cond, body }],
+            else_body: Some(else_body),
+        })))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    // ─── eval scripting: for ───
+
+    #[test]
+    fn test_eval_for() {
+        let body = program(vec![complete(pipeable(false, vec![sc(&["echo", "$i"])]))]);
+        let prog = program(vec![complete(compound(ScriptCommand::For(ForCommand {
+            var: "i".into(),
+            words: vec!["a".into(), "b".into()],
+            body,
+        })))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+        unsafe { std::env::remove_var("i"); }
+    }
+
+    // ─── eval scripting: case ───
+
+    #[test]
+    fn test_eval_case_match() {
+        let item_body = program(vec![complete(pipeable(false, vec![sc(&["echo", "matched"])]))]);
+        let prog = program(vec![complete(compound(ScriptCommand::Case(CaseCommand {
+            word: "x".into(),
+            items: vec![
+                CaseItem { patterns: vec!["x".into()], body: item_body },
+            ],
+        })))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_eval_case_no_match() {
+        let item_body = program(vec![complete(pipeable(false, vec![sc(&["echo", "matched"])]))]);
+        let prog = program(vec![complete(compound(ScriptCommand::Case(CaseCommand {
+            word: "z".into(),
+            items: vec![
+                CaseItem { patterns: vec!["x".into()], body: item_body },
+                CaseItem { patterns: vec!["y".into()], body: program(vec![]) },
+            ],
+        })))]);
+        assert_eq!(eval_program(&prog, &[], 0), 0);
+    }
+
+    // ─── eval variable assignment ───
+
+    #[test]
+    fn test_pure_assignment_persists() {
+        // v=hello  (pure assignment, no command)
+        let prog = program(vec![complete(pipeable(false, vec![sc_env(&[("v", "hello")], &[])]))]);
+        let prev = std::env::var("v").ok();
+        eval_program(&prog, &[], 0);
+        assert_eq!(std::env::var("v"), Ok("hello".to_string()));
+        // Clean up
+        match prev {
+            Some(v) => unsafe { std::env::set_var("v", v); },
+            None => unsafe { std::env::remove_var("v"); },
+        }
+    }
+
+    #[test]
+    fn test_temp_override_restored() {
+        // v=hello echo x  (temp override, restored after)
+        let prog = program(vec![complete(pipeable(false, vec![sc_env(&[("v", "hello")], &["echo", "x"])]))]);
+        let prev = std::env::var("v").ok();
+        eval_program(&prog, &[], 0);
+        // After the command, v should be restored to its previous value
+        assert_eq!(std::env::var("v").ok(), prev);
+    }
 }
 
 

@@ -53,7 +53,7 @@ fn expand_glob(pattern: &str) -> Vec<String> {
     }
 }
 
-fn glob_match(pattern: &str, text: &str) -> bool {
+pub fn glob_match(pattern: &str, text: &str) -> bool {
     let pchars: Vec<char> = pattern.chars().collect();
     let tchars: Vec<char> = text.chars().collect();
     glob_match_recursive(&pchars, &tchars, 0, 0)

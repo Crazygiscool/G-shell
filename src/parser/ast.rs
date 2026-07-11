@@ -18,7 +18,7 @@ pub enum TokenKind {
     DLass,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub value: String,
@@ -32,23 +32,23 @@ impl Token {
 
 // ── AST node types ──
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub commands: Vec<CompleteCommand>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompleteCommand {
     pub and_or: AndOrList,
     pub background: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AndOrList {
     pub nodes: Vec<AndOrNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AndOrNode {
     pub command: CommandNode,
     pub operator: Option<AndOrOp>,
@@ -60,26 +60,26 @@ pub enum AndOrOp {
     Or,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CommandNode {
     Pipeable(Pipeline),
     Compound(ScriptCommand),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Pipeline {
     pub negated: bool,
     pub commands: Vec<SimpleCommand>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SimpleCommand {
     pub env_overrides: Vec<(String, String)>,
     pub words: Vec<String>,
     pub redirects: Vec<Redirect>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RedirectKind {
     Output,
     Append,
@@ -87,16 +87,16 @@ pub enum RedirectKind {
     Heredoc,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Redirect {
     pub fd: i32,
     pub kind: RedirectKind,
     pub target: String,
 }
 
-// ── Scripting AST nodes (parsed in Commands 3) ──
+// ── Scripting AST nodes ──
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ScriptCommand {
     If(IfCommand),
     For(ForCommand),
@@ -106,44 +106,44 @@ pub enum ScriptCommand {
     Subshell(Program),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IfCommand {
     pub clauses: Vec<IfClause>,
     pub else_body: Option<Program>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IfClause {
     pub condition: Program,
     pub body: Program,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ForCommand {
     pub var: String,
     pub words: Vec<String>,
     pub body: Program,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WhileCommand {
     pub condition: Program,
     pub body: Program,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CaseCommand {
     pub word: String,
     pub items: Vec<CaseItem>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CaseItem {
     pub patterns: Vec<String>,
     pub body: Program,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     pub name: String,
     pub body: Program,

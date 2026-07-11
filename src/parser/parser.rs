@@ -183,7 +183,7 @@ impl<'a> Parser<'a> {
 
     fn parse_subshell(&mut self) -> ScriptCommand {
         self.advance(); // consume '('
-        let program = self.parse_program();
+        let program = self.parse_compound_list();
         self.expect(TokenKind::RParen)
             .unwrap_or_else(|| panic!("Expected )"));
         ScriptCommand::Subshell(program)
@@ -342,6 +342,7 @@ impl<'a> Parser<'a> {
     fn check_terminator(&self) -> bool {
         self.peek().is_some_and(|t| {
             t.kind == TokenKind::DSemicolon
+                || t.kind == TokenKind::RParen
                 || (t.kind == TokenKind::Word && matches!(
                     t.value.as_str(),
                     "then" | "else" | "elif" | "fi"
@@ -370,6 +371,8 @@ impl<'a> Parser<'a> {
 
 fn parse_fd_from_value(value: &str, kind: TokenKind) -> i32 {
     let num_part = if value.ends_with(">>") || value.ends_with("<<") {
+        &value[..value.len() - 2]
+    } else if value.ends_with(">&") || value.ends_with("<&") {
         &value[..value.len() - 2]
     } else if value.ends_with('>') || value.ends_with('<') {
         &value[..value.len() - 1]
@@ -400,4 +403,342 @@ pub fn parse(tokens: &[Token]) -> Program {
 
 pub fn parse_compound_list(tokens: &[Token]) -> Program {
     Parser::new(tokens).parse_compound_list()
+}
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::tokenize::tokenize;
+
+    // ─── Helpers ───
+
+    fn w(s: &str) -> String { s.to_string() }
+
+    fn sc(words: &[&str]) -> SimpleCommand {
+        SimpleCommand { env_overrides: vec![], words: words.iter().map(|s| s.to_string()).collect(), redirects: vec![] }
+    }
+
+    fn sc_env(env: &[(&str, &str)], words: &[&str]) -> SimpleCommand {
+        SimpleCommand {
+            env_overrides: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            words: words.iter().map(|s| s.to_string()).collect(),
+            redirects: vec![],
+        }
+    }
+
+    fn pipeable(negated: bool, cmds: Vec<SimpleCommand>) -> CommandNode {
+        CommandNode::Pipeable(Pipeline { negated, commands: cmds })
+    }
+
+    fn compound(sc: ScriptCommand) -> CommandNode {
+        CommandNode::Compound(sc)
+    }
+
+    fn complete(cmd: CommandNode) -> CompleteCommand {
+        CompleteCommand {
+            and_or: AndOrList { nodes: vec![AndOrNode { command: cmd, operator: None }] },
+            background: false,
+        }
+    }
+
+    fn bg(cmd: CommandNode) -> CompleteCommand {
+        CompleteCommand {
+            and_or: AndOrList { nodes: vec![AndOrNode { command: cmd, operator: None }] },
+            background: true,
+        }
+    }
+
+    fn program(commands: Vec<CompleteCommand>) -> Program {
+        Program { commands }
+    }
+
+    fn parse_input(input: &str) -> Program {
+        parse(&tokenize(input))
+    }
+
+    // ─── Simple commands ───
+
+    #[test]
+    fn test_parse_empty() {
+        assert_eq!(parse_input(""), program(vec![]));
+    }
+
+    #[test]
+    fn test_parse_single_word() {
+        assert_eq!(parse_input("hello"), program(vec![complete(pipeable(false, vec![sc(&["hello"])]))]));
+    }
+
+    #[test]
+    fn test_parse_multiple_words() {
+        assert_eq!(parse_input("echo hello world"), program(vec![complete(pipeable(false, vec![sc(&["echo", "hello", "world"])]))]));
+    }
+
+    // ─── Semicolon separator ───
+
+    #[test]
+    fn test_semicolon() {
+        let prog = parse_input("echo a; echo b");
+        assert_eq!(prog.commands.len(), 2);
+        assert_eq!(prog.commands[0], complete(pipeable(false, vec![sc(&["echo", "a"])])));
+        assert_eq!(prog.commands[1], complete(pipeable(false, vec![sc(&["echo", "b"])])));
+    }
+
+    // ─── Pipeline ───
+
+    #[test]
+    fn test_pipeline() {
+        let prog = parse_input("echo a | cat");
+        assert_eq!(prog, program(vec![complete(
+            pipeable(false, vec![sc(&["echo", "a"]), sc(&["cat"])])
+        )]));
+    }
+
+    #[test]
+    fn test_pipeline_negated() {
+        let prog = parse_input("! echo a | cat");
+        assert_eq!(prog, program(vec![complete(
+            pipeable(true, vec![sc(&["echo", "a"]), sc(&["cat"])])
+        )]));
+    }
+
+    // ─── AND / OR ───
+
+    #[test]
+    fn test_and_or() {
+        let prog = parse_input("true && echo y || echo n");
+        assert_eq!(prog.commands.len(), 1);
+        let nodes = &prog.commands[0].and_or.nodes;
+        assert_eq!(nodes.len(), 3);
+        // operators are on the node that follows && / ||
+        assert_eq!(nodes[0].command, pipeable(false, vec![sc(&["true"])]));
+        assert_eq!(nodes[0].operator, None);
+        assert_eq!(nodes[1].command, pipeable(false, vec![sc(&["echo", "y"])]));
+        assert_eq!(nodes[1].operator, Some(AndOrOp::And));
+        assert_eq!(nodes[2].command, pipeable(false, vec![sc(&["echo", "n"])]));
+        assert_eq!(nodes[2].operator, Some(AndOrOp::Or));
+    }
+
+    // ─── Background ───
+
+    #[test]
+    fn test_background() {
+        assert_eq!(parse_input("sleep 1 &"), program(vec![bg(pipeable(false, vec![sc(&["sleep", "1"])]))]));
+    }
+
+    // ─── Env overrides ───
+
+    #[test]
+    fn test_env_override() {
+        let prog = parse_input("FOO=bar echo");
+        assert_eq!(prog, program(vec![complete(pipeable(
+            false, vec![sc_env(&[("FOO", "bar")], &["echo"])]
+        ))]));
+    }
+
+    #[test]
+    fn test_pure_assignment() {
+        let prog = parse_input("FOO=bar");
+        assert_eq!(prog, program(vec![complete(pipeable(
+            false, vec![sc_env(&[("FOO", "bar")], &[])]
+        ))]));
+    }
+
+    #[test]
+    fn test_multiple_env_overrides() {
+        let prog = parse_input("A=1 B=2 cmd");
+        assert_eq!(prog, program(vec![complete(pipeable(
+            false, vec![sc_env(&[("A", "1"), ("B", "2")], &["cmd"])]
+        ))]));
+    }
+
+    // ─── Redirects ───
+
+    #[test]
+    fn test_redirect_output() {
+        let prog = parse_input("echo > file");
+        let Pipeline { commands, .. } = match &prog.commands[0].and_or.nodes[0].command {
+            CommandNode::Pipeable(p) => p,
+            _ => panic!("expected pipeable"),
+        };
+        assert_eq!(commands[0].words, vec![w("echo")]);
+        assert_eq!(commands[0].redirects.len(), 1);
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Output);
+        assert_eq!(commands[0].redirects[0].target, "file");
+    }
+
+    #[test]
+    fn test_redirect_input() {
+        let prog = parse_input("cat < file");
+        let Pipeline { commands, .. } = match &prog.commands[0].and_or.nodes[0].command {
+            CommandNode::Pipeable(p) => p,
+            _ => panic!("expected pipeable"),
+        };
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Input);
+        assert_eq!(commands[0].redirects[0].target, "file");
+    }
+
+    #[test]
+    fn test_redirect_append() {
+        let prog = parse_input("echo >> file");
+        let Pipeline { commands, .. } = match &prog.commands[0].and_or.nodes[0].command {
+            CommandNode::Pipeable(p) => p,
+            _ => panic!("expected pipeable"),
+        };
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Append);
+    }
+
+    #[test]
+    fn test_redirect_stderr() {
+        let prog = parse_input("echo 2>&1");
+        let Pipeline { commands, .. } = match &prog.commands[0].and_or.nodes[0].command {
+            CommandNode::Pipeable(p) => p,
+            _ => panic!("expected pipeable"),
+        };
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Output);
+        assert_eq!(commands[0].redirects[0].fd, 2);
+        assert_eq!(commands[0].redirects[0].target, "1");
+    }
+
+    #[test]
+    fn test_heredoc() {
+        let prog = parse_input("cat << EOF");
+        let Pipeline { commands, .. } = match &prog.commands[0].and_or.nodes[0].command {
+            CommandNode::Pipeable(p) => p,
+            _ => panic!("expected pipeable"),
+        };
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Heredoc);
+        assert_eq!(commands[0].redirects[0].target, "EOF");
+    }
+
+    // ─── Subshell ───
+
+    #[test]
+    fn test_subshell() {
+        let prog = parse_input("(echo hi)");
+        let body = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "hi"])]))] };
+        assert_eq!(prog, program(vec![complete(compound(ScriptCommand::Subshell(body)))]));
+    }
+
+    // ─── Scripting: if ───
+
+    #[test]
+    fn test_if() {
+        let prog = parse_input("if true; then echo ok; fi");
+        let condition = Program { commands: vec![complete(pipeable(false, vec![sc(&["true"])]))] };
+        let body = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "ok"])]))] };
+        let if_cmd = ScriptCommand::If(IfCommand {
+            clauses: vec![IfClause { condition, body }],
+            else_body: None,
+        });
+        assert_eq!(prog, program(vec![complete(compound(if_cmd))]));
+    }
+
+    #[test]
+    fn test_if_else() {
+        let prog = parse_input("if false; then echo a; else echo b; fi");
+        let cond = Program { commands: vec![complete(pipeable(false, vec![sc(&["false"])]))] };
+        let body_a = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "a"])]))] };
+        let body_b = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "b"])]))] };
+        let if_cmd = ScriptCommand::If(IfCommand {
+            clauses: vec![IfClause { condition: cond, body: body_a }],
+            else_body: Some(body_b),
+        });
+        assert_eq!(prog, program(vec![complete(compound(if_cmd))]));
+    }
+
+    #[test]
+    fn test_if_elif() {
+        let prog = parse_input("if false; then echo a; elif true; then echo b; fi");
+        let c1 = Program { commands: vec![complete(pipeable(false, vec![sc(&["false"])]))] };
+        let b1 = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "a"])]))] };
+        let c2 = Program { commands: vec![complete(pipeable(false, vec![sc(&["true"])]))] };
+        let b2 = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "b"])]))] };
+        let if_cmd = ScriptCommand::If(IfCommand {
+            clauses: vec![IfClause { condition: c1, body: b1 }, IfClause { condition: c2, body: b2 }],
+            else_body: None,
+        });
+        assert_eq!(prog, program(vec![complete(compound(if_cmd))]));
+    }
+
+    // ─── Scripting: for ───
+
+    #[test]
+    fn test_for() {
+        let prog = parse_input("for i in a b c; do echo $i; done");
+        let body = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "$i"])]))] };
+        let for_cmd = ScriptCommand::For(ForCommand {
+            var: "i".into(),
+            words: vec![w("a"), w("b"), w("c")],
+            body,
+        });
+        assert_eq!(prog, program(vec![complete(compound(for_cmd))]));
+    }
+
+    // ─── Scripting: while ───
+
+    #[test]
+    fn test_while() {
+        let prog = parse_input("while true; do echo loop; done");
+        let cond = Program { commands: vec![complete(pipeable(false, vec![sc(&["true"])]))] };
+        let body = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "loop"])]))] };
+        let while_cmd = ScriptCommand::While(WhileCommand { condition: cond, body });
+        assert_eq!(prog, program(vec![complete(compound(while_cmd))]));
+    }
+
+    // ─── Scripting: case ───
+
+    #[test]
+    fn test_case() {
+        let prog = parse_input("case x in x) echo m;; esac");
+        let body = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "m"])]))] };
+        let case_cmd = ScriptCommand::Case(CaseCommand {
+            word: "x".into(),
+            items: vec![CaseItem { patterns: vec![w("x")], body }],
+        });
+        assert_eq!(prog, program(vec![complete(compound(case_cmd))]));
+    }
+
+    #[test]
+    fn test_case_multiple_patterns() {
+        let prog = parse_input("case x in x|y) echo m;; esac");
+        let body = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "m"])]))] };
+        let case_cmd = ScriptCommand::Case(CaseCommand {
+            word: "x".into(),
+            items: vec![CaseItem { patterns: vec![w("x"), w("y")], body }],
+        });
+        assert_eq!(prog, program(vec![complete(compound(case_cmd))]));
+    }
+
+    #[test]
+    fn test_case_multiple_items() {
+        let prog = parse_input("case x in x) echo a;; y) echo b;; esac");
+        let body_a = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "a"])]))] };
+        let body_b = Program { commands: vec![complete(pipeable(false, vec![sc(&["echo", "b"])]))] };
+        let case_cmd = ScriptCommand::Case(CaseCommand {
+            word: "x".into(),
+            items: vec![
+                CaseItem { patterns: vec![w("x")], body: body_a },
+                CaseItem { patterns: vec![w("y")], body: body_b },
+            ],
+        });
+        assert_eq!(prog, program(vec![complete(compound(case_cmd))]));
+    }
+
+    // ─── Combined / complex ───
+
+    #[test]
+    fn test_pipeline_with_redirect() {
+        let prog = parse_input("echo hello > file | cat");
+        let cmds = match &prog.commands[0].and_or.nodes[0].command {
+            CommandNode::Pipeable(p) => &p.commands,
+            _ => panic!("expected pipeable"),
+        };
+        // First command in pipeline has the redirect
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0].words, vec![w("echo"), w("hello")]);
+        assert_eq!(cmds[0].redirects.len(), 1);
+        assert_eq!(cmds[1].words, vec![w("cat")]);
+    }
 }

@@ -370,3 +370,110 @@ fn expand_history(input: &str, history: &[String]) -> String {
 
     result
 }
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::tokenize::tokenize;
+
+    // ─── input_is_complete ───
+
+    #[test]
+    fn test_input_complete_simple() {
+        assert!(input_is_complete(&tokenize("echo hello")));
+    }
+
+    #[test]
+    fn test_input_complete_if_unclosed() {
+        assert!(!input_is_complete(&tokenize("if true; then echo")));
+    }
+
+    #[test]
+    fn test_input_complete_if_closed() {
+        assert!(input_is_complete(&tokenize("if true; then echo ok; fi")));
+    }
+
+    #[test]
+    fn test_input_complete_for_unclosed() {
+        assert!(!input_is_complete(&tokenize("for i in 1 2; do echo")));
+    }
+
+    #[test]
+    fn test_input_complete_for_closed() {
+        assert!(input_is_complete(&tokenize("for i in 1 2; do echo; done")));
+    }
+
+    #[test]
+    fn test_input_complete_nested_if() {
+        assert!(input_is_complete(&tokenize("if true; then if true; then echo; fi; fi")));
+    }
+
+    #[test]
+    fn test_input_complete_case_unclosed() {
+        assert!(!input_is_complete(&tokenize("case x in x) echo")));
+    }
+
+    #[test]
+    fn test_input_complete_case_closed() {
+        assert!(input_is_complete(&tokenize("case x in x) echo;; esac")));
+    }
+
+    #[test]
+    fn test_input_complete_while_unclosed() {
+        assert!(!input_is_complete(&tokenize("while true; do echo")));
+    }
+
+    #[test]
+    fn test_input_complete_while_closed() {
+        assert!(input_is_complete(&tokenize("while true; do echo; done")));
+    }
+
+    #[test]
+    fn test_input_complete_empty() {
+        assert!(input_is_complete(&[]));
+        assert!(input_is_complete(&tokenize("")));
+    }
+
+    // ─── expand_history ───
+
+    #[test]
+    fn test_expand_history_no_bang() {
+        assert_eq!(expand_history("echo hello", &[]), "echo hello");
+    }
+
+    #[test]
+    fn test_expand_history_bang_bang() {
+        let hist = vec!["echo prev".to_string()];
+        assert_eq!(expand_history("!!", &hist), "echo prev");
+    }
+
+    #[test]
+    fn test_expand_history_bang_dollar() {
+        let hist = vec!["echo hello world".to_string()];
+        assert_eq!(expand_history("!$", &hist), "world");
+    }
+
+    #[test]
+    fn test_expand_history_bang_number() {
+        let hist = vec!["first".to_string(), "second".to_string(), "third".to_string()];
+        assert_eq!(expand_history("!2", &hist), "second");
+    }
+
+    #[test]
+    fn test_expand_history_bang_bang_empty() {
+        assert_eq!(expand_history("!!", &[]), "");
+    }
+
+    #[test]
+    fn test_expand_history_escaped_bang() {
+        assert_eq!(expand_history("echo \\!", &[]), "echo \\!");
+    }
+
+    #[test]
+    fn test_expand_history_mixed() {
+        let hist = vec!["echo hello".to_string()];
+        assert_eq!(expand_history("echo !! world", &hist), "echo echo hello world");
+    }
+}
