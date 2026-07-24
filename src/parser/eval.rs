@@ -12,10 +12,8 @@ use crate::parser::redirect_stdout::{
 use crate::parser::expand::expand_tokens;
 use crate::parser::glob::{expand_globs, glob_match};
 use crate::parser::pathcache;
+use crate::parser::alias;
 use crate::commands::{echo, cd, pwd, r#type, env, test, help};
-
-static ALIASES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 const BUILTIN_REGISTRY: &[[&str; 2]; 16] = &[
     ["echo", "builtin"],
@@ -337,14 +335,13 @@ fn run_command(
             }
         }
         "alias" => {
-            let mut alias_table = ALIASES.lock().unwrap();
             for arg in args {
                 if let Some(eq_pos) = arg.find('=') {
                     let name = arg[..eq_pos].to_string();
                     let value = arg[eq_pos + 1..].trim_matches('\'').trim_matches('"').to_string();
-                    alias_table.insert(name, value);
+                    alias::set_alias(name, value);
                 } else {
-                    if let Some(value) = alias_table.get(*arg) {
+                    if let Some(value) = alias::get_alias(*arg) {
                         println!("alias {}='{}'", arg, value);
                     }
                 }
@@ -352,9 +349,8 @@ fn run_command(
             0
         }
         "unalias" => {
-            let mut alias_table = ALIASES.lock().unwrap();
             for arg in args {
-                alias_table.remove(*arg);
+                alias::remove_alias(*arg);
             }
             0
         }
@@ -413,12 +409,11 @@ fn eval_script(script: &ScriptCommand, history_data: &[String], last_exit_code: 
         ScriptCommand::Case(case_cmd) => eval_case(case_cmd, history_data, last_exit_code),
         ScriptCommand::Function(func) => {
             // Store function definition for later use
-            let mut alias_table = ALIASES.lock().unwrap();
             // Functions are stored as aliases that run the body program
             // For now, store a marker that allows calling the function
             // The function body is serialized as the alias value
             let body_str = format!("__gshell_fn_body__"); // placeholder
-            alias_table.insert(format!("__fn_{}", func.name), body_str);
+            alias::set_alias(format!("__fn_{}", func.name), body_str);
             // TODO: proper function storage and execution
             0
         }

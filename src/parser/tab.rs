@@ -1,46 +1,118 @@
 use std::path::Path;
 use crate::parser::pathcache;
+use crate::parser::alias;
 
-pub fn complete_command(prefix: &str) -> Vec<String> {
-    let mut matches: Vec<String> = Vec::new();
-    let builtins = ["echo", "cd", "pwd", "type", "exit", "history", "export", "unset", "set", "env", "source", "test", "alias", "unalias", "help"];
+#[derive(Clone, Debug)]
+pub struct CompletionCandidate {
+    pub display: String,
+    pub replacement: String,
+    pub description: String,
+}
 
-    for &cmd in builtins.iter().filter(|c| c.starts_with(prefix)) {
-        matches.push(cmd.to_string());
+fn builtin_descriptions() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("alias", "define or display aliases"),
+        ("cd", "change the working directory"),
+        ("echo", "display a line of text"),
+        ("env", "display or set environment variables"),
+        ("exit", "exit the shell"),
+        ("export", "set export attribute for variables"),
+        ("help", "display help information"),
+        ("history", "display or manipulate command history"),
+        ("pwd", "print name of current working directory"),
+        ("set", "set positional parameters or shell attributes"),
+        ("source", "read and execute commands from a file"),
+        ("test", "evaluate conditional expression"),
+        ("type", "describe a command"),
+        ("unalias", "remove alias definitions"),
+        ("unset", "unset variables or functions"),
+    ]
+}
+
+pub fn complete_command(prefix: &str) -> Vec<CompletionCandidate> {
+    let mut matches: Vec<CompletionCandidate> = Vec::new();
+    let prefix_lower = prefix.to_lowercase();
+
+    for (cmd, desc) in builtin_descriptions() {
+        if cmd.to_lowercase().starts_with(&prefix_lower) {
+            matches.push(CompletionCandidate {
+                display: format!("{}  -- {}", cmd, desc),
+                replacement: format!("{} ", cmd),
+                description: desc.to_string(),
+            });
+        }
     }
 
     for cmd in pathcache::get_cached_commands() {
-        if cmd.starts_with(prefix) && !matches.contains(&cmd) {
-            matches.push(cmd);
+        if cmd.to_lowercase().starts_with(&prefix_lower)
+            && !matches.iter().any(|m| m.replacement.trim() == cmd)
+        {
+            matches.push(CompletionCandidate {
+                display: cmd.clone(),
+                replacement: format!("{} ", cmd),
+                description: String::new(),
+            });
         }
     }
 
-    matches.sort();
-    matches.dedup();
+    for alias_name in alias::get_alias_names() {
+        if alias_name.to_lowercase().starts_with(&prefix_lower)
+            && !matches.iter().any(|m| m.replacement.trim() == alias_name)
+        {
+            matches.push(CompletionCandidate {
+                display: format!("{}  (alias)", alias_name),
+                replacement: format!("{} ", alias_name),
+                description: "alias".to_string(),
+            });
+        }
+    }
+
+    matches.sort_by(|a, b| a.replacement.cmp(&b.replacement));
     matches
 }
 
-pub fn complete_variable(prefix: &str) -> Vec<String> {
+pub fn complete_variable(prefix: &str) -> Vec<CompletionCandidate> {
     let var_name = if prefix.starts_with('$') { &prefix[1..] } else { prefix };
+    let prefix_lower = var_name.to_lowercase();
     let mut matches = Vec::new();
 
     for (key, _value) in std::env::vars() {
-        if key.starts_with(var_name) {
-            matches.push(format!("${{{}}}", key));
+        if key.to_lowercase().starts_with(&prefix_lower) {
+            matches.push(CompletionCandidate {
+                display: format!("${{{}}}  = {}", key, &_value[.._value.len().min(40)]),
+                replacement: format!("${{{}}}", key),
+                description: _value,
+            });
         }
     }
 
-    matches.sort();
+    matches.sort_by(|a, b| a.replacement.cmp(&b.replacement));
     matches
 }
 
-pub fn complete_path(prefix: &str) -> Vec<String> {
+pub fn complete_path(prefix: &str) -> Vec<CompletionCandidate> {
     let mut matches = Vec::new();
 
-    let path_str = if prefix.is_empty() { "." } else { prefix };
+    let expanded_prefix = if prefix.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            format!("{}{}", home, &prefix[1..])
+        } else {
+            prefix.to_string()
+        }
+    } else if prefix == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            home
+        } else {
+            prefix.to_string()
+        }
+    } else {
+        prefix.to_string()
+    };
+
+    let path_str = if expanded_prefix.is_empty() { "." } else { &expanded_prefix };
     let path = Path::new(path_str);
 
-    let (dir, partial_str) = if prefix.ends_with('/') {
+    let (dir, partial_str) = if expanded_prefix.ends_with('/') {
         (path, "")
     } else {
         let p = path.parent().unwrap_or_else(|| Path::new("."));
@@ -52,7 +124,10 @@ pub fn complete_path(prefix: &str) -> Vec<String> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.starts_with(partial_str) {
+            let partial_lower = partial_str.to_lowercase();
+            let name_lower = name.to_lowercase();
+
+            if name_lower.starts_with(&partial_lower) {
                 let mut new_path = dir.to_path_buf();
                 new_path.push(&name);
 
@@ -62,17 +137,31 @@ pub fn complete_path(prefix: &str) -> Vec<String> {
                     path_string.push('/');
                 }
 
-                if dir == Path::new(".") && !prefix.starts_with("./") {
-                    path_string = name;
+                if dir == Path::new(".") && !expanded_prefix.starts_with("./") {
+                    path_string = name.clone();
                     if new_path.is_dir() { path_string.push('/'); }
                 }
 
-                matches.push(path_string);
+                let display = if new_path.is_dir() {
+                    format!("{}/", path_string.trim_end_matches('/'))
+                } else {
+                    path_string.clone()
+                };
+
+                matches.push(CompletionCandidate {
+                    display,
+                    replacement: path_string,
+                    description: if new_path.is_dir() { "directory".to_string() } else { "file".to_string() },
+                });
             }
         }
     }
 
-    matches.sort();
-    matches.dedup();
+    matches.sort_by(|a, b| {
+        let a_dir = a.replacement.ends_with('/');
+        let b_dir = b.replacement.ends_with('/');
+        b_dir.cmp(&a_dir).then(a.replacement.cmp(&b.replacement))
+    });
+    matches.dedup_by(|a, b| a.replacement == b.replacement);
     matches
 }

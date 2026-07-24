@@ -17,10 +17,7 @@ use crate::commands::execute::execute;
 use crate::commands::env::{export_var, unset_var, set_vars, env_vars};
 use crate::commands::test::test_builtin;
 use crate::commands::help::help_cmd;
-use std::sync::Mutex;
-
-static ALIASES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> =
-    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+use crate::parser::alias;
 
 pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
         let registry: &[[&str; 2]; 16] = &[
@@ -234,14 +231,13 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             }
 
             "alias" => {
-                let mut alias_table = ALIASES.lock().unwrap();
                 for arg in &args_vec {
                     if let Some(eq_pos) = arg.find('=') {
                         let name = arg[..eq_pos].to_string();
                         let value = arg[eq_pos + 1..].trim_matches('\'').trim_matches('"').to_string();
-                        alias_table.insert(name, value);
+                        alias::set_alias(name, value);
                     } else {
-                        if let Some(value) = alias_table.get(*arg) {
+                        if let Some(value) = alias::get_alias(*arg) {
                             println!("alias {}='{}'", arg, value);
                         }
                     }
@@ -250,9 +246,8 @@ pub fn process_command(command: &str, last_exit_code: i32) -> i32 {
             }
 
             "unalias" => {
-                let mut alias_table = ALIASES.lock().unwrap();
                 for arg in &args_vec {
-                    alias_table.remove(*arg);
+                    alias::remove_alias(*arg);
                 }
                 0
             }

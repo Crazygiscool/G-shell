@@ -1,7 +1,7 @@
 use rustyline::config::{BellStyle, CompletionType};
-use rustyline::{Config, Editor};
+use rustyline::{Config, Editor, EventHandler, KeyEvent};
 use rustyline::history::{FileHistory, History};
-use crate::parser::helper::ShellHelper;
+use crate::parser::helper::{ShellHelper, TabHandler};
 use crate::parser::tokenize::tokenize;
 use crate::parser::ast::{TokenKind, Program, CompleteCommand, CommandNode};
 use crate::parser::{parser, eval};
@@ -11,6 +11,8 @@ use std::fs::{File, OpenOptions};
 use crate::parser::pathcache;
 use std::io::{BufWriter, Write};
 use std::env;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 pub struct Shell {
     rl: Editor<ShellHelper, FileHistory>,
@@ -41,8 +43,14 @@ impl Shell {
 
         let history_file = env::var("HISTFILE").unwrap_or_else(|_| ".shell_history".to_string());
 
+        let cycling_state = Arc::new(Mutex::new(None));
+        let handler = TabHandler {
+            cycling: Arc::clone(&cycling_state),
+        };
+
         let mut rl = Editor::<ShellHelper, FileHistory>::with_config(config)?;
-        rl.set_helper(Some(ShellHelper));
+        rl.set_helper(Some(ShellHelper::new(Arc::clone(&cycling_state))));
+        rl.bind_sequence(KeyEvent::from('\t'), EventHandler::Conditional(Box::new(handler)));
 
         let _ = rl.load_history(&history_file);
 

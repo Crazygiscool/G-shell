@@ -1,13 +1,32 @@
+use std::sync::{Arc, Mutex};
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
-use rustyline::{Context, Helper, Result};
-use crate::parser::tab::{complete_command, complete_path, complete_variable};
+use rustyline::{Context, Helper, Result, Cmd, Movement, RepeatCount,
+    ConditionalEventHandler, Event, EventContext};
+use crate::parser::tab::{complete_command, complete_path, complete_variable, CompletionCandidate};
 use crate::parser::tokenize::tokenize;
 
-#[derive(Clone, Copy)]
-pub struct ShellHelper;
+pub struct ShellHelper {
+    pub cycling: Arc<Mutex<Option<CyclingState>>>,
+}
+
+pub struct CyclingState {
+    pub candidates: Vec<CompletionCandidate>,
+    pub selected: usize,
+    pub start_pos: usize,
+    pub original_line: String,
+    pub original_pos: usize,
+}
+
+impl ShellHelper {
+    pub fn new(cycling: Arc<Mutex<Option<CyclingState>>>) -> Self {
+        ShellHelper {
+            cycling,
+        }
+    }
+}
 
 impl Helper for ShellHelper {}
 
@@ -47,7 +66,7 @@ impl Completer for ShellHelper {
 
         let is_command = tokens.len() <= 1 && !buf.ends_with(' ');
 
-        let matches: Vec<String> = if last_word.starts_with('$') {
+        let candidates: Vec<CompletionCandidate> = if last_word.starts_with('$') {
             complete_variable(last_word)
         } else if is_command {
             complete_command(last_word)
@@ -55,17 +74,105 @@ impl Completer for ShellHelper {
             complete_path(last_word)
         };
 
-        let candidates: Vec<Pair> = matches
+        let pairs: Vec<Pair> = candidates
             .into_iter()
-            .map(|m| {
-                let mut replacement = m.clone();
-                if is_command || !replacement.ends_with('/') {
-                    replacement.push(' ');
-                }
-                Pair { display: m, replacement }
+            .map(|c| Pair {
+                display: c.display,
+                replacement: c.replacement,
             })
             .collect();
 
-        Ok((start_pos, candidates))
+        Ok((start_pos, pairs))
     }
+}
+
+pub struct TabHandler {
+    pub cycling: Arc<Mutex<Option<CyclingState>>>,
+}
+
+impl ConditionalEventHandler for TabHandler {
+    fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+        let line = ctx.line();
+        let pos = ctx.pos();
+
+        {
+            let mut state = self.cycling.lock().unwrap();
+
+            if let Some(ref mut cycling) = *state {
+                if cycling.start_pos <= pos && pos <= line.len() {
+                    let current_word = line[cycling.start_pos..pos].trim_end();
+                    let stored_replacement = cycling.candidates[cycling.selected].replacement.trim_end();
+                    if current_word == stored_replacement || current_word.is_empty() {
+                        cycling.selected = (cycling.selected + 1) % cycling.candidates.len();
+                        let candidate = &cycling.candidates[cycling.selected];
+                        let new_line = format!(
+                            "{}{}{}",
+                            &line[..cycling.start_pos],
+                            candidate.replacement,
+                            &line[pos..]
+                        );
+                        return Some(Cmd::Replace(Movement::WholeLine, Some(new_line)));
+                    }
+                }
+                *state = None;
+            }
+        }
+
+        let buf = &line[..pos];
+        let tokens = tokenize(buf);
+        let last_word = if buf.ends_with(' ') || tokens.is_empty() {
+            ""
+        } else {
+            tokens.last().map(|t| t.value.as_str()).unwrap_or("")
+        };
+        let start_pos = if last_word.is_empty() {
+            pos
+        } else {
+            buf.rfind(last_word).unwrap_or(pos)
+        };
+        let is_command = tokens.len() <= 1 && !buf.ends_with(' ');
+
+        let candidates: Vec<CompletionCandidate> = if last_word.starts_with('$') {
+            complete_variable(last_word)
+        } else if is_command {
+            complete_command(last_word)
+        } else {
+            complete_path(last_word)
+        };
+
+        if candidates.len() > 1 {
+            let replacements: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
+            let lcp = longest_common_prefix(&replacements);
+            let current_len = pos - start_pos;
+            if lcp.len() > current_len {
+                let mut state = self.cycling.lock().unwrap();
+                *state = Some(CyclingState {
+                    candidates,
+                    selected: 0,
+                    start_pos,
+                    original_line: line.to_string(),
+                    original_pos: pos,
+                });
+                return Some(Cmd::Complete);
+            }
+        }
+
+        None
+    }
+}
+
+fn longest_common_prefix(strs: &[&str]) -> String {
+    if strs.is_empty() {
+        return String::new();
+    }
+    let mut prefix = strs[0].to_string();
+    for s in &strs[1..] {
+        while !s.starts_with(&prefix) {
+            prefix.pop();
+            if prefix.is_empty() {
+                return String::new();
+            }
+        }
+    }
+    prefix
 }
