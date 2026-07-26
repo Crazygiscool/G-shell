@@ -15,27 +15,27 @@ use crate::parser::pathcache;
 use crate::parser::alias;
 use crate::commands::{echo, cd, pwd, r#type, env, test, help};
 
-const BUILTIN_REGISTRY: &[[&str; 2]; 16] = &[
-    ["echo", "builtin"],
-    ["type", "builtin"],
-    ["exit", "builtin"],
-    ["pwd", "builtin"],
-    ["cd", "builtin"],
-    ["history", "builtin"],
-    ["export", "builtin"],
-    ["unset", "builtin"],
-    ["set", "builtin"],
-    ["env", "builtin"],
-    ["source", "builtin"],
-    ["test", "builtin"],
-    ["[", "builtin"],
-    ["alias", "builtin"],
-    ["unalias", "builtin"],
-    ["help", "builtin"],
+pub const BUILTIN_REGISTRY: &[(&str, &str, &str)] = &[
+    ("alias", "builtin", "define or display aliases"),
+    ("cd", "builtin", "change the working directory"),
+    ("echo", "builtin", "display a line of text"),
+    ("env", "builtin", "display or set environment variables"),
+    ("exit", "builtin", "exit the shell"),
+    ("export", "builtin", "set export attribute for variables"),
+    ("help", "builtin", "display help information"),
+    ("history", "builtin", "display or manipulate command history"),
+    ("pwd", "builtin", "print name of current working directory"),
+    ("set", "builtin", "set positional parameters or shell attributes"),
+    ("source", "builtin", "read and execute commands from a file"),
+    ("test", "builtin", "evaluate conditional expression"),
+    ("[", "builtin", "evaluate conditional expression"),
+    ("type", "builtin", "describe a command"),
+    ("unalias", "builtin", "remove alias definitions"),
+    ("unset", "builtin", "unset variables or functions"),
 ];
 
 fn is_builtin(name: &str) -> bool {
-    BUILTIN_REGISTRY.iter().any(|e| e[0] == name)
+    BUILTIN_REGISTRY.iter().any(|e| e.0 == name)
 }
 
 // ── Top-level evaluation ──
@@ -258,7 +258,7 @@ fn run_command(
                 println!("type: type [name ...]");
                 println!("    Display information about command type.");
             } else if let Some(first) = args.first() {
-                r#type::r#type(first, BUILTIN_REGISTRY);
+                r#type::r#type(first, &BUILTIN_REGISTRY);
             } else {
                 eprintln!("type: missing operand");
                 return 1;

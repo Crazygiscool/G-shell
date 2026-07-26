@@ -5,7 +5,7 @@ pub fn help_cmd(args: &[&str]) {
         println!();
         println!("Built-in commands:");
         println!("  alias, cd, echo, env, exit, export, help, history,");
-        println!("  pwd, set, source, test, type, unalias, unset");
+        println!("  pwd, set, source, test, [, type, unalias, unset");
         println!();
         println!("Features:");
         println!("  glob (*?[]), variables ($NAME ${{}} $?), command substitution");

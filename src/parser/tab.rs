@@ -1,6 +1,7 @@
 use std::path::Path;
 use crate::parser::pathcache;
 use crate::parser::alias;
+use crate::parser::eval::BUILTIN_REGISTRY;
 
 #[derive(Clone, Debug)]
 pub struct CompletionCandidate {
@@ -11,23 +12,10 @@ pub struct CompletionCandidate {
 }
 
 fn builtin_descriptions() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("alias", "define or display aliases"),
-        ("cd", "change the working directory"),
-        ("echo", "display a line of text"),
-        ("env", "display or set environment variables"),
-        ("exit", "exit the shell"),
-        ("export", "set export attribute for variables"),
-        ("help", "display help information"),
-        ("history", "display or manipulate command history"),
-        ("pwd", "print name of current working directory"),
-        ("set", "set positional parameters or shell attributes"),
-        ("source", "read and execute commands from a file"),
-        ("test", "evaluate conditional expression"),
-        ("type", "describe a command"),
-        ("unalias", "remove alias definitions"),
-        ("unset", "unset variables or functions"),
-    ]
+    BUILTIN_REGISTRY
+        .iter()
+        .map(|&(name, _, desc)| (name, desc))
+        .collect()
 }
 
 pub fn complete_command(prefix: &str) -> Vec<CompletionCandidate> {

@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::io::{self, Write, Read};
 use rustyline::completion::{Completer, Pair};
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -8,6 +9,8 @@ use rustyline::{Context, Helper, Result, Cmd, Movement, RepeatCount,
 use crate::parser::tab::{complete_command, complete_path, complete_variable, CompletionCandidate};
 use crate::parser::ast::TokenKind;
 use crate::parser::tokenize::tokenize;
+
+const LISTMAX: usize = 100;
 
 pub struct ShellHelper {
     #[allow(dead_code)]
@@ -140,10 +143,32 @@ impl ConditionalEventHandler for TabHandler {
             complete_path(last_word)
         };
 
+        let current_len = pos - start_pos;
+
+        if candidates.len() > LISTMAX {
+            eprint!("zsh: do you wish to see all {} possibilities? (y or n) ", candidates.len());
+            io::stderr().flush().ok();
+            let mut byte = [0u8; 1];
+            if io::stdin().read(&mut byte).is_ok() && byte[0] == b'y' {
+                eprintln!();
+                return None;
+            }
+            eprintln!();
+            return Some(Cmd::Noop);
+        }
+
+        if candidates.len() == 1 {
+            let replacement = &candidates[0].replacement;
+            if replacement.len() > current_len {
+                let new_line = format!("{}{}{}", &line[..start_pos], replacement, &line[pos..]);
+                return Some(Cmd::Replace(Movement::WholeLine, Some(new_line)));
+            }
+            return None;
+        }
+
         if candidates.len() > 1 {
             let replacements: Vec<&str> = candidates.iter().map(|c| c.replacement.as_str()).collect();
             let lcp = longest_common_prefix(&replacements);
-            let current_len = pos - start_pos;
             if lcp.len() > current_len {
                 let mut state = self.cycling.lock().unwrap();
                 *state = Some(CyclingState {
