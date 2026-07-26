@@ -1,5 +1,5 @@
 [package]
-name = "g-shell"
+name = "gshell"
 version = "1.2.5"
 authors = ["Crazygiscool <crazygiscool@proton.me>"]
 edition = "2024"
