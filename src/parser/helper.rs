@@ -9,6 +9,7 @@ use crate::parser::tab::{complete_command, complete_path, complete_variable, Com
 use crate::parser::tokenize::tokenize;
 
 pub struct ShellHelper {
+    #[allow(dead_code)]
     pub cycling: Arc<Mutex<Option<CyclingState>>>,
 }
 
@@ -16,7 +17,9 @@ pub struct CyclingState {
     pub candidates: Vec<CompletionCandidate>,
     pub selected: usize,
     pub start_pos: usize,
+    #[allow(dead_code)]
     pub original_line: String,
+    #[allow(dead_code)]
     pub original_pos: usize,
 }
 

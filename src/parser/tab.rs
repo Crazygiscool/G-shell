@@ -6,6 +6,7 @@ use crate::parser::alias;
 pub struct CompletionCandidate {
     pub display: String,
     pub replacement: String,
+    #[allow(dead_code)]
     pub description: String,
 }
 

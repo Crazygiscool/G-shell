@@ -401,9 +401,6 @@ pub fn parse(tokens: &[Token]) -> Program {
     Parser::new(tokens).parse_program()
 }
 
-pub fn parse_compound_list(tokens: &[Token]) -> Program {
-    Parser::new(tokens).parse_compound_list()
-}
 
 // ── Tests ──
 

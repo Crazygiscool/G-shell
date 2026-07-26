@@ -343,6 +343,7 @@ fn map_omp_segment(seg_type: &str, obj: &JsonValue) -> Option<String> {
 // ── Minimal JSON parser (no dependencies) ──
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum JsonValue {
     Null,
     Bool(bool),

@@ -3,6 +3,7 @@ use std::fs::File;
 use std::os::unix::process::CommandExt;
 use crate::parser::pathcache;
 
+#[allow(dead_code)]
 pub fn execute(cmd: &str, args: &[&str], redirect: Option<(&str, i32)>) -> i32 {
         if let Some(path) = pathcache::find_in_path_cache(cmd) {
             let mut child = Command::new(&path);
