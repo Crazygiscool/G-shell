@@ -6,6 +6,7 @@ use rustyline::validate::Validator;
 use rustyline::{Context, Helper, Result, Cmd, Movement, RepeatCount,
     ConditionalEventHandler, Event, EventContext};
 use crate::parser::tab::{complete_command, complete_path, complete_variable, CompletionCandidate};
+use crate::parser::ast::TokenKind;
 use crate::parser::tokenize::tokenize;
 
 pub struct ShellHelper {
@@ -67,7 +68,7 @@ impl Completer for ShellHelper {
             buf.rfind(last_word).unwrap_or(pos)
         };
 
-        let is_command = tokens.len() <= 1 && !buf.ends_with(' ');
+        let is_command = is_at_command_position(&tokens, buf.ends_with(' '));
 
         let candidates: Vec<CompletionCandidate> = if last_word.starts_with('$') {
             complete_variable(last_word)
@@ -103,19 +104,15 @@ impl ConditionalEventHandler for TabHandler {
 
             if let Some(ref mut cycling) = *state {
                 if cycling.start_pos <= pos && pos <= line.len() {
-                    let current_word = line[cycling.start_pos..pos].trim_end();
-                    let stored_replacement = cycling.candidates[cycling.selected].replacement.trim_end();
-                    if current_word == stored_replacement || current_word.is_empty() {
-                        cycling.selected = (cycling.selected + 1) % cycling.candidates.len();
-                        let candidate = &cycling.candidates[cycling.selected];
-                        let new_line = format!(
-                            "{}{}{}",
-                            &line[..cycling.start_pos],
-                            candidate.replacement,
-                            &line[pos..]
-                        );
-                        return Some(Cmd::Replace(Movement::WholeLine, Some(new_line)));
-                    }
+                    cycling.selected = (cycling.selected + 1) % cycling.candidates.len();
+                    let candidate = &cycling.candidates[cycling.selected];
+                    let new_line = format!(
+                        "{}{}{}",
+                        &line[..cycling.start_pos],
+                        candidate.replacement,
+                        &line[pos..]
+                    );
+                    return Some(Cmd::Replace(Movement::WholeLine, Some(new_line)));
                 }
                 *state = None;
             }
@@ -133,7 +130,7 @@ impl ConditionalEventHandler for TabHandler {
         } else {
             buf.rfind(last_word).unwrap_or(pos)
         };
-        let is_command = tokens.len() <= 1 && !buf.ends_with(' ');
+        let is_command = is_at_command_position(&tokens, buf.ends_with(' '));
 
         let candidates: Vec<CompletionCandidate> = if last_word.starts_with('$') {
             complete_variable(last_word)
@@ -156,12 +153,33 @@ impl ConditionalEventHandler for TabHandler {
                     original_line: line.to_string(),
                     original_pos: pos,
                 });
-                return Some(Cmd::Complete);
+                let new_line = format!("{}{}{}", &line[..start_pos], lcp, &line[pos..]);
+                return Some(Cmd::Replace(Movement::WholeLine, Some(new_line)));
             }
         }
 
         None
     }
+}
+
+fn is_at_command_position(tokens: &[crate::parser::ast::Token], buf_ends_with_space: bool) -> bool {
+    if tokens.is_empty() {
+        return true;
+    }
+    let current_idx = if buf_ends_with_space {
+        tokens.len()
+    } else {
+        tokens.len() - 1
+    };
+    if current_idx == 0 {
+        return true;
+    }
+    matches!(
+        tokens[current_idx - 1].kind,
+        TokenKind::Pipe | TokenKind::AndIf | TokenKind::OrIf
+            | TokenKind::Semicolon | TokenKind::DSemicolon
+            | TokenKind::Background | TokenKind::Bang | TokenKind::LParen
+    )
 }
 
 fn longest_common_prefix(strs: &[&str]) -> String {

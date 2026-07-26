@@ -113,10 +113,12 @@ pub fn complete_path(prefix: &str) -> Vec<CompletionCandidate> {
     let path_str = if expanded_prefix.is_empty() { "." } else { &expanded_prefix };
     let path = Path::new(path_str);
 
-    let (dir, partial_str) = if expanded_prefix.ends_with('/') {
+    let (dir, partial_str) = if expanded_prefix.ends_with('/') || path.is_dir() {
         (path, "")
     } else {
-        let p = path.parent().unwrap_or_else(|| Path::new("."));
+        let p = path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let f = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         (p, f)
     };
