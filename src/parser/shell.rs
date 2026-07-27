@@ -14,6 +14,32 @@ use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+const DEFAULT_RC: &str = "# G-shell init file — sourced on startup\n\
+    # Set GSHELLRC to a custom path to override this file.\n\
+    \n\
+    # Welcome banner\n\
+    fastfetch\n\
+    \n\
+    # Aliases\n\
+    alias ll='ls -lah'\n\
+    alias la='ls -A'\n\
+    alias g='git'\n\
+    alias ..='cd ..'\n\
+    alias ...='cd ../..'\n\
+    alias cl='clear'\n\
+    \n\
+    # Prompt\n\
+    export GS_PROMPT_FORMAT='{user}@{host}:{path}{git}{exit} {prompt} '\n\
+    export GS_STYLE_USER='green bold'\n\
+    export GS_STYLE_HOST='green'\n\
+    export GS_STYLE_PATH='cyan bold'\n\
+    export GS_STYLE_GIT='yellow'\n\
+    export GS_STYLE_EXIT='red'\n\
+    export PS1='\\w \\$ '\n\
+    \n\
+    # History\n\
+    export HISTFILE='$HOME/.g_shell_history'\n";
+
 pub struct Shell {
     rl: Editor<ShellHelper, FileHistory>,
     history_start_index: usize,
@@ -86,7 +112,12 @@ impl Shell {
         }
         let contents = match std::fs::read_to_string(&rcfile) {
             Ok(c) => c,
-            Err(_) => return,
+            Err(_) => {
+                if let Err(e) = std::fs::write(&rcfile, DEFAULT_RC) {
+                    eprintln!("Error writing default config to {}: {}", rcfile, e);
+                }
+                DEFAULT_RC.to_string()
+            }
         };
         for line in contents.lines() {
             let trimmed = line.trim();
