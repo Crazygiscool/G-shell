@@ -1,6 +1,6 @@
 [package]
 name = "gshell"
-version = "1.2.6"
+version = "1.2.7"
 authors = ["Crazygiscool <crazygiscool@proton.me>"]
 edition = "2024"
 rust-version = "1.91"
