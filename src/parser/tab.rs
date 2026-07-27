@@ -115,10 +115,13 @@ pub fn complete_path(prefix: &str) -> Vec<CompletionCandidate> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
-            let partial_lower = partial_str.to_lowercase();
-            let name_lower = name.to_lowercase();
+            let has_uppercase = partial_str.chars().any(|c| c.is_uppercase());
 
-            if name_lower.starts_with(&partial_lower) {
+            if if has_uppercase {
+                name.starts_with(partial_str)
+            } else {
+                name.to_lowercase().starts_with(&partial_str.to_lowercase())
+            } {
                 let mut new_path = dir.to_path_buf();
                 new_path.push(&name);
 
@@ -155,4 +158,280 @@ pub fn complete_path(prefix: &str) -> Vec<CompletionCandidate> {
     });
     matches.dedup_by(|a, b| a.replacement == b.replacement);
     matches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn tmpdir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gshell_test_{}", name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_builtin_descriptions_count() {
+        let descs = builtin_descriptions();
+        assert_eq!(descs.len(), BUILTIN_REGISTRY.len());
+    }
+
+    #[test]
+    fn test_builtin_descriptions_all_have_names_and_descs() {
+        for (name, desc) in builtin_descriptions() {
+            assert!(!name.is_empty());
+            assert!(!desc.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_builtin_descriptions_includes_key_builtins() {
+        let descs = builtin_descriptions();
+        let names: Vec<&str> = descs.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"cd"));
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"exit"));
+        assert!(names.contains(&"export"));
+        assert!(names.contains(&"test"));
+        assert!(names.contains(&"["));
+        assert!(names.contains(&"alias"));
+        assert!(names.contains(&"history"));
+    }
+
+    #[test]
+    fn test_complete_command_exact_match() {
+        let results = complete_command("cd");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|c| c.replacement.trim() == "cd"));
+    }
+
+    #[test]
+    fn test_complete_command_prefix() {
+        let results = complete_command("ec");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|c| c.replacement.trim() == "echo"));
+    }
+
+    #[test]
+    fn test_complete_command_case_insensitive() {
+        let results = complete_command("CD");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|c| c.replacement.trim() == "cd"));
+    }
+
+    #[test]
+    fn test_complete_command_no_match() {
+        let results = complete_command("zzznonexistent");
+        let builtins: Vec<_> = results.iter().filter(|c| c.description != "alias" || true).collect();
+        assert!(builtins.is_empty() || results.iter().all(|c| !c.replacement.trim().starts_with("zzznonexistent")));
+    }
+
+    #[test]
+    fn test_complete_command_empty_prefix() {
+        let results = complete_command("");
+        assert!(results.len() >= 15);
+    }
+
+    #[test]
+    fn test_complete_command_replacement_has_trailing_space() {
+        let results = complete_command("cd");
+        for c in &results {
+            if c.replacement.trim() == "cd" {
+                assert!(c.replacement.ends_with(' '));
+            }
+        }
+    }
+
+    #[test]
+    fn test_complete_command_sorted() {
+        let results = complete_command("");
+        for w in results.windows(2) {
+            assert!(w[0].replacement <= w[1].replacement);
+        }
+    }
+
+    #[test]
+    fn test_complete_variable_with_dollar() {
+        let results = complete_variable("$PATH");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|c| c.replacement.contains("PATH")));
+    }
+
+    #[test]
+    fn test_complete_variable_without_dollar() {
+        let results = complete_variable("PATH");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|c| c.replacement.contains("PATH")));
+    }
+
+    #[test]
+    fn test_complete_variable_replacement_has_dollar() {
+        let results = complete_variable("HOME");
+        assert!(!results.is_empty());
+        for c in &results {
+            assert!(c.replacement.starts_with('$'));
+        }
+    }
+
+    #[test]
+    fn test_complete_variable_sorted() {
+        let results = complete_variable("");
+        for w in results.windows(2) {
+            assert!(w[0].replacement <= w[1].replacement);
+        }
+    }
+
+    #[test]
+    fn test_complete_variable_no_match() {
+        let results = complete_variable("$zzznonexistent_xyz_123");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_complete_path_empty_prefix_lists_cwd() {
+        let results = complete_path("");
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_complete_path_filters_by_prefix() {
+        let dir = tmpdir("path_filter");
+        fs::create_dir_all(dir.join("alpha")).unwrap();
+        fs::create_dir_all(dir.join("bravo")).unwrap();
+        fs::File::create(dir.join("alpha.txt")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("al");
+        assert!(results.iter().any(|c| c.replacement.starts_with("alpha")));
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_single_char_prefix() {
+        let dir = tmpdir("path_single");
+        fs::create_dir_all(dir.join("aur")).unwrap();
+        fs::create_dir_all(dir.join("build")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("a");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].replacement.starts_with("aur"));
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_directory_gets_slash() {
+        let dir = tmpdir("path_slash");
+        fs::create_dir_all(dir.join("mydir")).unwrap();
+        fs::File::create(dir.join("mydir.txt")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("my");
+        let dir_result = results.iter().find(|c| c.replacement.ends_with('/'));
+        assert!(dir_result.is_some());
+        assert!(dir_result.unwrap().replacement.starts_with("mydir"));
+
+        let file_result = results.iter().find(|c| c.replacement == "mydir.txt");
+        assert!(file_result.is_some());
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_nonexistent_prefix_falls_back_to_cwd() {
+        let dir = tmpdir("path_fallback");
+        fs::create_dir_all(dir.join("xyz_item")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("xyz");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].replacement.starts_with("xyz_item"));
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_parent_empty_string_fix() {
+        let dir = tmpdir("path_parent");
+        fs::create_dir_all(dir.join("test_entry")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("test");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].replacement.starts_with("test_entry"));
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_trailing_slash_lists_contents() {
+        let dir = tmpdir("path_trailing");
+        fs::create_dir_all(dir.join("subdir")).unwrap();
+        fs::File::create(dir.join("subdir/file.txt")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("subdir/");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].replacement.contains("file.txt"));
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_directories_before_files() {
+        let dir = tmpdir("path_order");
+        fs::create_dir_all(dir.join("adir")).unwrap();
+        fs::File::create(dir.join("afile.txt")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("a");
+        assert!(!results.is_empty());
+        let first_dir = results.iter().position(|c| c.replacement.ends_with('/'));
+        let first_file = results.iter().position(|c| !c.replacement.ends_with('/'));
+        if let (Some(d), Some(f)) = (first_dir, first_file) {
+            assert!(d < f, "directories should come before files");
+        }
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_complete_path_no_match_empty_result() {
+        let dir = tmpdir("path_nomatch");
+        fs::create_dir_all(dir.join("abc")).unwrap();
+
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let results = complete_path("zzz");
+        assert!(results.is_empty());
+
+        std::env::set_current_dir(&old).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

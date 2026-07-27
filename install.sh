@@ -2,14 +2,14 @@
 set -e
 
 BIN_DIR="${1:-$HOME/.local/bin}"
-BIN_NAME="g-shell"
+BIN_NAME="gshell"
 PROFILE="release"
 
 echo "Building G-Shell ($PROFILE)..."
 cargo build --profile "$PROFILE"
 
 mkdir -p "$BIN_DIR"
-cp "target/$PROFILE/$BIN_NAME" "$BIN_DIR/"
+    cp "target/$PROFILE/$BIN_NAME" "$BIN_DIR/"
 
 if [ ! -f "$HOME/.gshellrc" ]; then
 	echo "Copying default .gshellrc to $HOME/.gshellrc"

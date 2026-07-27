@@ -7,12 +7,12 @@ case "$MODE" in
   --dev)
     shift 2>/dev/null || true
     cargo build 2>&1
-    exec target/debug/g-shell "$@"
+    exec target/debug/gshell "$@"
     ;;
   --bin)
     shift 2>/dev/null || true
     cargo build --release 2>&1
-    exec target/release/g-shell "$@"
+    exec target/release/gshell "$@"
     ;;
   *)
     echo "Usage: $0 [--dev | --bin] [args...]" >&2
