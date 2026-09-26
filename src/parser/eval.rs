@@ -1,4 +1,4 @@
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{RawFd, AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use os_pipe::pipe;
@@ -12,26 +12,39 @@ use crate::parser::redirect_stdout::{
 use crate::parser::expand::expand_tokens;
 use crate::parser::glob::{expand_globs, glob_match};
 use crate::parser::pathcache;
-use crate::parser::alias;
+use crate::parser::{alias, functions};
 use crate::commands::{echo, cd, pwd, r#type, env, test, help};
 
 pub const BUILTIN_REGISTRY: &[(&str, &str, &str)] = &[
     ("alias", "builtin", "define or display aliases"),
+    ("cat", "builtin", "concatenate files and print on standard output"),
     ("cd", "builtin", "change the working directory"),
+    ("clear", "builtin", "clear the terminal screen"),
+    ("cp", "builtin", "copy files and directories"),
+    ("date", "builtin", "print the current date and time"),
     ("echo", "builtin", "display a line of text"),
     ("env", "builtin", "display or set environment variables"),
     ("exit", "builtin", "exit the shell"),
     ("export", "builtin", "set export attribute for variables"),
+    ("grep", "builtin", "print lines matching a pattern"),
+    ("head", "builtin", "output the first part of files"),
     ("help", "builtin", "display help information"),
     ("history", "builtin", "display or manipulate command history"),
+    ("ls", "builtin", "list directory contents"),
+    ("mkdir", "builtin", "create directories"),
+    ("mv", "builtin", "move files and directories"),
     ("pwd", "builtin", "print name of current working directory"),
+    ("rm", "builtin", "remove files or directories"),
+    ("rmdir", "builtin", "remove empty directories"),
     ("set", "builtin", "set positional parameters or shell attributes"),
+    ("sleep", "builtin", "delay for a specified amount of time"),
     ("source", "builtin", "read and execute commands from a file"),
     ("test", "builtin", "evaluate conditional expression"),
-    ("[", "builtin", "evaluate conditional expression"),
     ("type", "builtin", "describe a command"),
     ("unalias", "builtin", "remove alias definitions"),
     ("unset", "builtin", "unset variables or functions"),
+    ("wc", "builtin", "count lines, words, and bytes"),
+    ("[", "builtin", "evaluate conditional expression"),
 ];
 
 fn is_builtin(name: &str) -> bool {
@@ -107,12 +120,32 @@ fn eval_multi_command_pipeline(
 ) -> i32 {
     let total = commands.len();
     let mut children = Vec::new();
-    let mut prev_stdin: Option<Stdio> = None;
+    // The previous stage's output, kept as a raw fd alongside the owning
+    // handles (ChildStdout / PipeReader) that must stay open until consumed.
+    let mut readers: Vec<os_pipe::PipeReader> = Vec::new();
+    let mut child_outputs: Vec<std::process::ChildStdout> = Vec::new();
+    let mut prev_input: Option<RawFd> = None;
     let mut exit_code = 0;
+
+    // Temporarily point fd `n` at `orig`, run `op`, then restore fd `n`.
+    fn with_fd(orig: Option<RawFd>, n: i32, op: impl FnOnce()) {
+        let saved = unsafe { libc::dup(n) };
+        if let Some(fd) = orig {
+            unsafe { libc::dup2(fd, n); }
+        }
+        op();
+        if saved >= 0 {
+            unsafe {
+                libc::dup2(saved, n);
+                libc::close(saved);
+            }
+        }
+    }
 
     for (i, cmd) in commands.iter().enumerate() {
         let is_last = i == total - 1;
-        let expanded = expand_and_glob(&cmd.words, last_exit_code);
+        let mut expanded = expand_and_glob(&cmd.words, last_exit_code);
+        alias_expand(&mut expanded, last_exit_code);
 
         if expanded.is_empty() {
             exit_code = 0;
@@ -122,17 +155,29 @@ fn eval_multi_command_pipeline(
         let program = &expanded[0];
         let args: Vec<&str> = expanded.iter().skip(1).map(|s| s.as_str()).collect();
 
-        if is_builtin(program) {
+        if is_builtin(program) || functions::is_function(program) {
             if is_last {
-                let code = run_builtin(program, &args, history_data, last_exit_code);
-                exit_code = code;
-                prev_stdin = None;
+                // Feed the previous stage's stdin into the builtin on fd 0.
+                with_fd(prev_input, 0, || {
+                    exit_code = run_builtin(program, &args, history_data, last_exit_code);
+                });
+                prev_input = None;
             } else {
-                let (reader, mut writer) = pipe().expect("pipe failed");
-                let output = get_builtin_output(program, &args, history_data);
-                let _ = std::io::Write::write_all(&mut writer, output.as_bytes());
+                // Run in-process with stdout captured by a pipe so the output
+                // becomes the next stage's stdin.
+                let (reader, writer) = pipe().expect("pipe failed");
+                let saved_out = unsafe { libc::dup(1) };
+                unsafe { libc::dup2(writer.as_raw_fd(), 1); }
+                with_fd(prev_input, 0, || {
+                    exit_code = run_builtin(program, &args, history_data, last_exit_code);
+                });
+                unsafe {
+                    libc::dup2(saved_out, 1);
+                    libc::close(saved_out);
+                }
                 drop(writer);
-                prev_stdin = Some(Stdio::from(reader));
+                prev_input = Some(reader.as_raw_fd());
+                readers.push(reader);
             }
             continue;
         }
@@ -143,8 +188,9 @@ fn eval_multi_command_pipeline(
             child_cmd.arg0(program);
             child_cmd.args(&args);
 
-            if let Some(stdin) = prev_stdin.take() {
-                child_cmd.stdin(stdin);
+            if let Some(fd) = prev_input.take() {
+                let f = unsafe { std::fs::File::from_raw_fd(libc::dup(fd)) };
+                child_cmd.stdin(Stdio::from(f));
             }
             if !is_last {
                 child_cmd.stdout(Stdio::piped());
@@ -157,7 +203,8 @@ fn eval_multi_command_pipeline(
                 Ok(mut child) => {
                     if !is_last {
                         if let Some(out) = child.stdout.take() {
-                            prev_stdin = Some(Stdio::from(out));
+                            prev_input = Some(out.as_raw_fd());
+                            child_outputs.push(out);
                         }
                     }
                     children.push(child);
@@ -176,6 +223,9 @@ fn eval_multi_command_pipeline(
         }
     }
 
+    drop(child_outputs);
+    drop(readers);
+
     for mut child in children {
         match child.wait() {
             Ok(status) => exit_code = status.code().unwrap_or(1),
@@ -192,7 +242,7 @@ fn eval_simple_command(
     cmd: &SimpleCommand,
     history_data: &[String],
     last_exit_code: i32,
-    opt_stdin: Option<Stdio>,
+    opt_stdin: Option<RawFd>,
 ) -> i32 {
     // Apply env overrides
     let originals: Vec<(String, Option<String>)> = cmd.env_overrides.iter().map(|(k, v)| {
@@ -205,7 +255,8 @@ fn eval_simple_command(
     // For externals we use Command::stdout/stderr/stdin in the execute function
     let saved_fds: Vec<(i32, RawFd)> = apply_redirects(&cmd.redirects);
 
-    let expanded = expand_and_glob(&cmd.words, last_exit_code);
+    let mut expanded = expand_and_glob(&cmd.words, last_exit_code);
+    alias_expand(&mut expanded, last_exit_code);
     let is_pure_assignment = expanded.is_empty() && !cmd.env_overrides.is_empty();
     let code = if is_pure_assignment {
         0
@@ -239,7 +290,7 @@ fn run_command(
     program: &str,
     args: &[&str],
     redirects: &[Redirect],
-    opt_stdin: Option<Stdio>,
+    stdin_fd: Option<RawFd>,
     history_data: &[String],
     last_exit_code: i32,
 ) -> i32 {
@@ -296,7 +347,10 @@ fn run_command(
             0
         }
         "unset" => {
-            env::unset_var(args);
+            for arg in args {
+                env::unset_var(&[*arg]);
+                functions::remove(arg);
+            }
             0
         }
         "set" => {
@@ -305,6 +359,23 @@ fn run_command(
         }
         "env" => {
             env::env_vars();
+            0
+        }
+        "ls" => crate::commands::ls::ls(args),
+        "mkdir" => crate::commands::mkdir::mkdir(args),
+        "rmdir" => crate::commands::rmdir::rmdir(args),
+        "rm" => crate::commands::rm::rm(args),
+        "cat" => crate::commands::cat::cat(args, stdin_fd),
+        "head" => crate::commands::head::head(args, stdin_fd),
+        "wc" => crate::commands::wc::wc(args, stdin_fd),
+        "cp" => crate::commands::cp::cp(args),
+        "mv" => crate::commands::mv::mv(args),
+        "date" => crate::commands::date::date(args),
+        "sleep" => crate::commands::sleep::sleep(args),
+        "grep" => crate::commands::grep::grep(args, stdin_fd),
+        "clear" => {
+            print!("\x1b[2J\x1b[H");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
             0
         }
         "source" => {
@@ -367,6 +438,10 @@ fn run_command(
             0
         }
         _ => {
+            // User-defined function
+            if functions::is_function(program) {
+                return run_function(program, args, history_data, last_exit_code);
+            }
             // External command
             if let Some(path) = pathcache::find_in_path_cache(program) {
                 let mut child = Command::new(&path);
@@ -376,8 +451,9 @@ fn run_command(
                 // Apply redirects for external command
                 apply_redirects_to_cmd(&mut child, redirects);
 
-                if let Some(stdin) = opt_stdin {
-                    child.stdin(stdin);
+                if let Some(fd) = stdin_fd {
+                    let f = unsafe { std::fs::File::from_raw_fd(libc::dup(fd)) };
+                    child.stdin(Stdio::from(f));
                 }
 
                 match child.status() {
@@ -400,21 +476,33 @@ fn run_command(
 fn eval_script(script: &ScriptCommand, history_data: &[String], last_exit_code: i32) -> i32 {
     match script {
         ScriptCommand::Subshell(program) => {
-            // Fork and eval in child (simplified: eval directly, can't affect parent)
-            eval_program(program, history_data, last_exit_code)
+            // Fork so that cd / unset etc. inside ( ... ) can't affect the
+            // parent shell; the child runs the program and its status becomes
+            // the subshell's exit code.
+            let pid = unsafe { libc::fork() };
+            if pid == 0 {
+                let code = eval_program(program, history_data, last_exit_code);
+                std::process::exit(code.max(0).min(255));
+            } else if pid > 0 {
+                let mut status: libc::c_int = 0;
+                unsafe { libc::waitpid(pid, &mut status, 0); }
+                if libc::WIFEXITED(status) {
+                    libc::WEXITSTATUS(status) as i32
+                } else {
+                    1
+                }
+            } else {
+                // fork() failed — evaluate inline as a fallback.
+                eval_program(program, history_data, last_exit_code)
+            }
         }
         ScriptCommand::If(if_cmd) => eval_if(if_cmd, history_data, last_exit_code),
         ScriptCommand::For(for_cmd) => eval_for(for_cmd, history_data, last_exit_code),
         ScriptCommand::While(while_cmd) => eval_while(while_cmd, history_data, last_exit_code),
         ScriptCommand::Case(case_cmd) => eval_case(case_cmd, history_data, last_exit_code),
         ScriptCommand::Function(func) => {
-            // Store function definition for later use
-            // Functions are stored as aliases that run the body program
-            // For now, store a marker that allows calling the function
-            // The function body is serialized as the alias value
-            let body_str = format!("__gshell_fn_body__"); // placeholder
-            alias::set_alias(format!("__fn_{}", func.name), body_str);
-            // TODO: proper function storage and execution
+            // Store the function body for later invocation.
+            functions::define(&func.name, func.body.clone());
             0
         }
     }
@@ -481,7 +569,25 @@ fn apply_redirects(redirects: &[Redirect]) -> Vec<(i32, RawFd)> {
             RedirectKind::Output if r.fd == 2 => redirect_stderr_to(&r.target).map(|f| (2, f)),
             RedirectKind::Append if r.fd == 1 => redirect_stdout_append(&r.target).map(|f| (1, f)),
             RedirectKind::Append if r.fd == 2 => redirect_stderr_append(&r.target).map(|f| (2, f)),
-            RedirectKind::Input => redirect_stdin_from(&r.target).map(|f| (0, f)),
+            RedirectKind::Input if r.fd == 0 => redirect_stdin_from(&r.target).map(|f| (0, f)),
+            RedirectKind::Dup => {
+                // 2>&1: dup2(src, dst); keep the old dst around to restore.
+                if let Ok(src) = r.target.parse::<i32>() {
+                    if src >= 0 {
+                        let old = unsafe { libc::dup(r.fd) };
+                        if old >= 0 {
+                            unsafe { libc::dup2(src, r.fd); }
+                            Some((r.fd, old))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
         if let Some(pair) = result {
@@ -518,6 +624,23 @@ fn apply_redirects_to_cmd(cmd: &mut Command, redirects: &[Redirect]) {
                     cmd.stdin(f);
                 }
             }
+            RedirectKind::Dup => {
+                // 2>&1 for a spawned child: dup the source fd into the stream.
+                if let Ok(src) = r.target.parse::<i32>() {
+                    if src >= 0 {
+                        let d = unsafe { libc::dup(src) };
+                        if d >= 0 {
+                            let f = unsafe { File::from_raw_fd(d) };
+                            match r.fd {
+                                0 => { cmd.stdin(f); }
+                                1 => { cmd.stdout(f); }
+                                2 => { cmd.stderr(f); }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -529,37 +652,81 @@ fn expand_and_glob(words: &[String], last_exit_code: i32) -> Vec<String> {
     expand_globs(&expanded)
 }
 
-// ── Builtin helpers for pipes ──
-
-fn get_builtin_output(name: &str, args: &[&str], history_data: &[String]) -> String {
-    match name {
-        "echo" => format!("{}\n", args.join(" ")),
-        "pwd" => format!("{}\n", std::env::current_dir().unwrap_or_default().display()),
-        "history" => {
-            history_data.iter().enumerate()
-                .map(|(i, s)| format!("  {:>3}  {}\n", i + 1, s))
-                .collect::<String>()
-        }
-        "type" => {
-            if let Some(cmd) = args.first() {
-                if is_builtin(cmd) {
-                    format!("{} is a shell builtin\n", cmd)
-                } else if let Some(path) = pathcache::find_in_path_cache(cmd) {
-                    format!("{} is {}\n", cmd, path.display())
-                } else {
-                    format!("{}: not found\n", cmd)
+/// Replace the first word with its alias value (word-splitting the value and
+/// appending the remaining arguments). Follows alias chains with a depth guard.
+fn alias_expand(expanded: &mut Vec<String>, last_exit_code: i32) {
+    if expanded.is_empty() {
+        return;
+    }
+    let mut name = expanded[0].clone();
+    for _ in 0..8 {
+        let Some(value) = alias::get_alias(&name) else { return; };
+        let toks = crate::parser::tokenize::tokenize(&value);
+        let prog = crate::parser::parser::parse(&toks);
+        let mut fresh: Vec<String> = Vec::new();
+        for node in &prog.commands {
+            if let Some(p) = node.and_or.nodes.first() {
+                if let CommandNode::Pipeable(pipe) = &p.command {
+                    if let Some(sc) = pipe.commands.first() {
+                        if !sc.words.is_empty() {
+                            fresh.extend(sc.words.clone());
+                            break;
+                        }
+                    }
                 }
-            } else {
-                String::new()
             }
         }
-        _ => String::new(),
+        if fresh.is_empty() || fresh[0] == name {
+            return;
+        }
+        fresh.extend(expanded.iter().skip(1).cloned());
+        let next = expand_and_glob(&fresh, last_exit_code);
+        *expanded = next;
+        if expanded.is_empty() {
+            return;
+        }
+        name = expanded[0].clone();
     }
 }
+
+// ── Builtin helpers for pipes ──
 
 fn run_builtin(name: &str, args: &[&str], history_data: &[String], last_exit_code: i32) -> i32 {
     let code = run_command(name, args, &[], None, history_data, last_exit_code);
     std::io::Write::flush(&mut std::io::stdout()).ok();
+    code
+}
+
+/// Call a user-defined function with positional parameters bound to `$1..$n`,
+/// `$#` and `$@` (restored after the call, like a subshell scope).
+fn run_function(program: &str, args: &[&str], history_data: &[String], last_exit_code: i32) -> i32 {
+    let Some(body) = functions::get(program) else { return 127; };
+
+    let mut saved: Vec<(String, Option<String>)> = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        let name = (i + 1).to_string();
+        let old = std::env::var(&name).ok();
+        unsafe { std::env::set_var(&name, arg); }
+        saved.push((name, old));
+    }
+    for name in ["#", "@", "0"] {
+        let old = std::env::var(name).ok();
+        saved.push((name.to_string(), old));
+    }
+    unsafe {
+        std::env::set_var("#", args.len().to_string());
+        std::env::set_var("@", args.join(" "));
+        std::env::set_var("0", program);
+    }
+
+    let code = eval_program(&body, history_data, last_exit_code);
+
+    for (name, old) in saved.into_iter().rev() {
+        match old {
+            Some(v) => unsafe { std::env::set_var(&name, v); },
+            None => unsafe { std::env::remove_var(&name); },
+        }
+    }
     code
 }
 
@@ -626,10 +793,8 @@ mod tests {
 
     #[test]
     fn test_is_builtin_false() {
-        assert!(!is_builtin("cat"));
-        assert!(!is_builtin("ls"));
-        assert!(!is_builtin("grep"));
         assert!(!is_builtin("foobar"));
+        assert!(!is_builtin("shutdown"));
     }
 
     // ─── glob_match_simple ───

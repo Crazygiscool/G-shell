@@ -104,7 +104,27 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Bash-style function: `name() { ... }` or `name() cmd`
+        if self.peek_bash_function() {
+            return CommandNode::Compound(ScriptCommand::Function(self.parse_bash_function()));
+        }
+
         CommandNode::Pipeable(self.parse_pipeline())
+    }
+
+    /// Peek ahead for `WORD ( )` (bash-style function definition).
+    fn peek_bash_function(&self) -> bool {
+        let a = match self.tokens.get(self.pos) {
+            Some(t) => t,
+            None => return false,
+        };
+        if a.kind != TokenKind::Word {
+            return false;
+        }
+        let next = self.tokens.get(self.pos + 1);
+        let after = self.tokens.get(self.pos + 2);
+        next.is_some_and(|t| t.kind == TokenKind::LParen)
+            && after.is_some_and(|t| t.kind == TokenKind::RParen)
     }
 
     fn parse_pipeline(&mut self) -> Pipeline {
@@ -146,8 +166,7 @@ impl<'a> Parser<'a> {
                 let token = self.advance().unwrap();
                 words.push(token.value.clone());
             } else if self.check_redirect() {
-                let (fd, kind, target) = self.parse_redirect();
-                redirects.push(Redirect { fd, kind, target });
+                redirects.extend(self.parse_redirect());
             } else {
                 break;
             }
@@ -163,10 +182,11 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_redirect(&mut self) -> (i32, RedirectKind, String) {
+    fn parse_redirect(&mut self) -> Vec<Redirect> {
         let token = self.advance().unwrap();
-        let fd = parse_fd_from_value(&token.value, token.kind);
-        let kind = match token.kind {
+        let value = &token.value;
+        let fd = parse_fd_from_value(value, token.kind);
+        let base_kind = match token.kind {
             TokenKind::Great => RedirectKind::Output,
             TokenKind::DGreat => RedirectKind::Append,
             TokenKind::Less => RedirectKind::Input,
@@ -176,7 +196,27 @@ impl<'a> Parser<'a> {
         let target = self.expect(TokenKind::Word)
             .map(|t| t.value.clone())
             .unwrap_or_default();
-        (fd, kind, target)
+
+        // `&>` redirects stdout and stderr to the same target.
+        if value == "&>" {
+            return vec![
+                Redirect { fd: 1, kind: RedirectKind::Output, target: target.clone() },
+                Redirect { fd: 2, kind: RedirectKind::Output, target },
+            ];
+        }
+
+        // Ops ending in `&` (2>&…, >&…, <&…) duplicate an fd when the
+        // target is a pure number, otherwise they are plain file redirects.
+        let kind = if value.ends_with('&') {
+            match target.parse::<i32>() {
+                Ok(_) => RedirectKind::Dup,
+                Err(_) => base_kind,
+            }
+        } else {
+            base_kind
+        };
+
+        vec![Redirect { fd, kind, target }]
     }
 
     // ── Scripting construct parsers ──
@@ -317,6 +357,22 @@ impl<'a> Parser<'a> {
         self.expect_word("{"); // or compound list
         let body = self.parse_compound_list();
         self.expect_word("}");
+        FunctionDef { name, body }
+    }
+
+    fn parse_bash_function(&mut self) -> FunctionDef {
+        // We're at `NAME ( )`
+        let name = self.advance().unwrap().value.clone();
+        self.advance(); // (
+        self.advance(); // )
+        let body = if self.expect_word("{").is_some() {
+            let body = self.parse_compound_list();
+            self.expect_word("}");
+            body
+        } else {
+            // Single-command body: `name() cmd args...`
+            Program { commands: vec![self.parse_complete_command()] }
+        };
         FunctionDef { name, body }
     }
 
@@ -593,7 +649,7 @@ mod tests {
             CommandNode::Pipeable(p) => p,
             _ => panic!("expected pipeable"),
         };
-        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Output);
+        assert_eq!(commands[0].redirects[0].kind, RedirectKind::Dup);
         assert_eq!(commands[0].redirects[0].fd, 2);
         assert_eq!(commands[0].redirects[0].target, "1");
     }

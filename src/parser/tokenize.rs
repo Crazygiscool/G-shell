@@ -57,6 +57,32 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                 break;
             }
 
+            // COMMAND SUBSTITUTION: `$(...)` must stay one word so the
+            // expander can capture it. Nested parens are balanced.
+            '$' if !in_single => {
+                if chars.peek() == Some(&'(') {
+                    chars.next();
+                    let mut depth = 1i32;
+                    cur.push('$');
+                    cur.push('(');
+                    while let Some(ch) = chars.next() {
+                        cur.push(ch);
+                        match ch {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    cur.push('$');
+                }
+            }
+
             // WHITESPACE SPLITTING
             c if c.is_whitespace() && !in_single && !in_double => {
                 flush_word(&mut cur, &mut tokens);
@@ -144,7 +170,11 @@ pub fn tokenize(input: &str) -> Vec<Token> {
 
             '&' if !in_single && !in_double => {
                 flush_word(&mut cur, &mut tokens);
-                if let Some('&') = chars.peek() {
+                if let Some('>') = chars.peek() {
+                    // "&>" → stdout AND stderr redirected together
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::Great, "&>"));
+                } else if let Some('&') = chars.peek() {
                     chars.next();
                     tokens.push(Token::new(TokenKind::AndIf, "&&"));
                 } else {

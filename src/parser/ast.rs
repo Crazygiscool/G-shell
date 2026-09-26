@@ -85,6 +85,9 @@ pub enum RedirectKind {
     Append,
     Input,
     Heredoc,
+    /// `2>&1`, `1>&2`, `0<&1`: dup2(src_fd, this fd). The `target` holds the
+    /// source fd number (the parser normalizes name forms into Output/Input).
+    Dup,
 }
 
 #[derive(Debug, Clone, PartialEq)]

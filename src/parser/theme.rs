@@ -124,8 +124,8 @@ pub fn render_path() -> String {
 }
 
 pub fn render_git() -> String {
-    // Check for GS_GIT_DISABLED
-    if env::var("GS_GIT_DISABLED").is_ok() {
+    // The kernel has no git; skip the two extra subprocess spawns per prompt.
+    if env::var("GS_GIT_DISABLED").is_ok() || env::var("TERM").as_deref() == Ok("dumb") {
         return String::new();
     }
 

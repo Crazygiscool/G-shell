@@ -45,6 +45,7 @@ pub struct Shell {
     history_start_index: usize,
     history_file: String,
     pub last_exit_code: i32,
+    pub skip_rc: bool,
 }
 
 extern "C" fn sigint_handler(_sig: i32) {
@@ -54,7 +55,7 @@ extern "C" fn sigint_handler(_sig: i32) {
 }
 
 impl Shell {
-    pub fn new() -> rustyline::Result<Self> {
+    pub fn new_with_opts(skip_rc: bool) -> rustyline::Result<Self> {
         // Install SIGINT handler
         unsafe {
             let mut act: libc::sigaction = std::mem::zeroed();
@@ -92,11 +93,36 @@ impl Shell {
 
         let history_start_index = rl.history().len();
 
-        Ok(Shell { rl, history_start_index, history_file, last_exit_code: 0 })
+        Ok(Shell { rl, history_start_index, history_file, last_exit_code: 0, skip_rc })
+    }
+
+    /// Execute a command string non-interactively (used by `-c` and scripts).
+    /// Line-oriented: multi-line constructs such as heredocs are not read.
+    pub fn run_command_string(&mut self, cmd: &str) -> i32 {
+        let mut last = self.last_exit_code;
+        for line in cmd.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed == "exit" {
+                break;
+            }
+            let tokens = tokenize(trimmed);
+            if tokens.is_empty() {
+                continue;
+            }
+            let program = parser::parse(&tokens);
+            last = eval::eval_program(&program, &[], last);
+        }
+        self.last_exit_code = last;
+        last
     }
 
     pub fn run(&mut self) -> rustyline::Result<()> {
-        self.source_rcfile();
+        if !self.skip_rc {
+            self.source_rcfile();
+        }
 
         let result = self.run_loop();
 

@@ -1,4 +1,5 @@
 use std::env;
+use std::os::unix::io::AsRawFd;
 use std::process::{Command, Stdio};
 
 
@@ -33,7 +34,7 @@ fn expand_vars_and_cmd(s: &str, last_exit_code: i32) -> String {
                 Some('(') => {
                     chars.next();
                     let cmd_str = capture_parens(&mut chars, ')');
-                    result.push_str(&execute_subshell(&cmd_str));
+                    result.push_str(&execute_subshell(&cmd_str, last_exit_code));
                 }
                 Some('?') => {
                     chars.next();
@@ -70,7 +71,7 @@ fn expand_vars_and_cmd(s: &str, last_exit_code: i32) -> String {
             }
         } else if c == '`' {
             let cmd_str = capture_backtick(&mut chars);
-            result.push_str(&execute_subshell(&cmd_str));
+            result.push_str(&execute_subshell(&cmd_str, last_exit_code));
         } else {
             result.push(c);
         }
@@ -115,23 +116,70 @@ fn capture_backtick(chars: &mut std::iter::Peekable<std::str::Chars>) -> String 
     inner
 }
 
-fn execute_subshell(cmd: &str) -> String {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .output();
+/// Run a command substitution using the shell's own evaluator in a forked
+/// child, capturing stdout. `sh -c` remains only as a host-side fallback if
+/// fork() is unavailable.
+fn execute_subshell(cmd: &str, last_exit_code: i32) -> String {
+    let tokens = crate::parser::tokenize::tokenize(cmd);
+    if tokens.is_empty() {
+        return String::new();
+    }
+    let program = crate::parser::parser::parse(&tokens);
+    if program.commands.is_empty() {
+        return String::new();
+    }
 
-    match output {
-        Ok(out) => {
-            let mut s = String::from_utf8_lossy(&out.stdout).to_string();
-            if s.ends_with('\n') {
+    let (reader, writer) = match os_pipe::pipe() {
+        Ok(p) => p,
+        Err(_) => return String::new(),
+    };
+    let pid = unsafe { libc::fork() };
+    if pid == 0 {
+        // Child: run the commands with stdout connected to the pipe.
+        unsafe {
+            libc::dup2(writer.as_raw_fd(), 1);
+        }
+        drop(writer);
+        drop(reader);
+        let code = crate::parser::eval::eval_program(&program, &[], last_exit_code);
+        std::process::exit(code.min(255).max(0));
+    } else if pid > 0 {
+        drop(writer);
+        let mut out = String::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = unsafe {
+                libc::read(reader.as_raw_fd(), buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if n <= 0 {
+                break;
+            }
+            out.push_str(&String::from_utf8_lossy(&buf[..n as usize]));
+        }
+        drop(reader);
+        let mut status: libc::c_int = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0); }
+        while out.ends_with('\n') {
+            out.pop();
+        }
+        out
+    } else {
+        // fork() failed: fall back to the host's sh if present.
+        if let Ok(output) = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .output()
+        {
+            let mut s = String::from_utf8_lossy(&output.stdout).to_string();
+            while s.ends_with('\n') {
                 s.pop();
             }
             s
+        } else {
+            String::new()
         }
-        Err(_) => String::new(),
     }
 }
 
