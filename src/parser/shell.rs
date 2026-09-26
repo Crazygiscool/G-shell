@@ -62,6 +62,16 @@ impl Shell {
             libc::sigaction(libc::SIGINT, &act, std::ptr::null_mut());
         }
 
+        // Kernel console: no real terminfo. Force rustyline's linear
+        // readline path (writes the prompt, reads finished lines via stdio),
+        // and HOME so source_rcfile() can find /.gshellrc.
+        if env::var("TERM").is_err() {
+            unsafe { env::set_var("TERM", "dumb") };
+        }
+        if env::var("HOME").is_err() {
+            unsafe { env::set_var("HOME", "/") };
+        }
+
         let config = Config::builder()
             .completion_type(CompletionType::List)
             .bell_style(BellStyle::Audible)
@@ -81,8 +91,6 @@ impl Shell {
         let _ = rl.load_history(&history_file);
 
         let history_start_index = rl.history().len();
-
-        pathcache::refresh_cache();
 
         Ok(Shell { rl, history_start_index, history_file, last_exit_code: 0 })
     }
@@ -135,7 +143,7 @@ impl Shell {
     fn run_loop(&mut self) -> rustyline::Result<()> {
         loop {
             let prompt = expand_prompt(&env::var("PS1").unwrap_or_else(|_| "$ ".to_string()), self.last_exit_code);
-            let readline = self.rl.readline(&prompt);
+            let readline = self.rl_readline(&prompt);
 
             match readline {
                 Ok(buffer) => {
@@ -201,11 +209,48 @@ impl Shell {
                             self.last_exit_code = eval::eval_program(&single, &history_vec, self.last_exit_code);
                         }
                     }
+
+                    // Non-tty stdout may be block-buffered; flush so output
+                    // appears immediately on the kernel console.
+                    let _ = std::io::stdout().flush();
                 }
                 Err(_) => break,
             }
         }
         Ok(())
+    }
+
+    fn rl_readline(&mut self, prompt: &str) -> rustyline::Result<String> {
+        if env::var("TERM").as_deref() == Ok("dumb") {
+            // Kernel console: rustynelne's raw/tty machinery and std's Stdin
+            // buffering wedge on the kernel's line-at-a-time console_read
+            // (std issues zero-count probe reads -> immediate EOF). Go
+            // straight to the raw syscall: the kernel returns one complete
+            // line per read, so accumulate chunk[256] until '\n'.
+            use std::io::Write;
+            std::io::stdout().write_all(prompt.as_bytes()).ok();
+            let _ = std::io::stdout().flush();
+            let mut out = String::new();
+            loop {
+                let mut chunk = [0u8; 256];
+                let n = unsafe { libc::read(0, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+                if n <= 0 {
+                    return Err(rustyline::error::ReadlineError::Eof);
+                }
+                let s = std::str::from_utf8(&chunk[..n as usize]).unwrap_or("");
+                if let Some(idx) = s.find('\n') {
+                    out.push_str(&s[..idx]);
+                    break;
+                }
+                out.push_str(s);
+                if out.len() > 4096 {
+                    break;
+                }
+            }
+            Ok(out)
+        } else {
+            self.rl.readline(prompt)
+        }
     }
 
     fn collect_until_complete(&mut self, first: &str) -> String {
@@ -215,7 +260,7 @@ impl Shell {
             if input_is_complete(&tokens) {
                 return buffer;
             }
-            match self.rl.readline("> ") {
+            match self.rl_readline("> ") {
                 Ok(line) => {
                     buffer.push('\n');
                     buffer.push_str(&line);
@@ -288,7 +333,7 @@ impl Shell {
                 let delimiter = tokens[pos + 1].clone();
                 let mut lines = Vec::new();
                 loop {
-                    let readline = self.rl.readline("> ");
+                    let readline = self.rl_readline("> ");
                     match readline {
                         Ok(line) => {
                             if line.trim() == delimiter {
