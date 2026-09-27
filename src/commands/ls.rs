@@ -34,7 +34,13 @@ pub fn ls(args: &[&str]) -> i32 {
     }
 
     if paths.is_empty() {
-        paths.push(".".to_string());
+        // Bare `ls` lists the current directory. Use an absolute path rather
+        // than "." so it also works on the G-Zero kernel, whose FAT driver
+        // never synthesizes the "." entry for open().
+        match std::env::current_dir() {
+            Ok(cwd) => paths.push(cwd.display().to_string()),
+            Err(_) => paths.push("/".to_string()),
+        }
     }
 
     let mut code = 0;
