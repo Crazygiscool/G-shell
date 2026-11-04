@@ -30,7 +30,7 @@ impl Style {
                 "underline" => {}
                 _ => {
                     if word.starts_with("on_") {
-                        style.bg = Some(word[3..].to_string());
+                        style.bg = Some(word.strip_prefix("on_").unwrap_or("").to_string());
                     } else if style.fg.is_none() {
                         style.fg = Some(word.to_string());
                     }

@@ -141,7 +141,7 @@ fn execute_subshell(cmd: &str, last_exit_code: i32) -> String {
         drop(writer);
         drop(reader);
         let code = crate::parser::eval::eval_program(&program, &[], last_exit_code);
-        std::process::exit(code.min(255).max(0));
+        std::process::exit(code.clamp(0, 255));
     } else if pid > 0 {
         drop(writer);
         let mut out = String::new();

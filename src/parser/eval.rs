@@ -492,7 +492,7 @@ fn eval_script(script: &ScriptCommand, history_data: &[String], last_exit_code: 
             let pid = unsafe { libc::fork() };
             if pid == 0 {
                 let code = eval_program(program, history_data, last_exit_code);
-                std::process::exit(code.max(0).min(255));
+                std::process::exit(code.clamp(0, 255));
             } else if pid > 0 {
                 let mut status: libc::c_int = 0;
                 unsafe { libc::waitpid(pid, &mut status, 0); }
