@@ -90,5 +90,42 @@ mod tests {
         assert_eq!(client.read_line().unwrap(), "pong-test");
         server.join().unwrap();
         let _ = std::fs::remove_file(path);
+
+    #[test]
+    fn test_hub_builtin_query_via_mock() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let path = "/tmp/gsh_hub_builtin_query.sock";
+        let _ = std::fs::remove_file(path);
+        let listener = UnixListener::bind(path).unwrap();
+        let server_path = path.to_string();
+        let server = thread::spawn(move || {
+            let (s, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(s.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let mut out = s.try_clone().unwrap();
+            writeln!(out, r#"{{"v":1,"type":"handshake_ack","id":"gsh-hs","status":"ok"}}"#).unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.contains("MSG_OBJECT_QUERY"));
+            writeln!(out, r#"{{"v":1,"type":"MSG_UI_RENDER_STATE","objects":[]}}"#).unwrap();
+            out.flush().unwrap();
+        });
+
+        unsafe {
+            std::env::set_var("ARCOS_HUB_SOCKET", &server_path);
+        }
+        let code = crate::commands::ipc::ipc_builtin(&["query"]);
+        unsafe {
+            std::env::remove_var("ARCOS_HUB_SOCKET");
+        }
+        let _ = std::fs::remove_file(&server_path);
+        server.join().unwrap();
+        assert_eq!(code, 0);
+    }
+
     }
 }

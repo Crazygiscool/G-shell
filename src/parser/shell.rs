@@ -589,4 +589,11 @@ mod tests {
         let hist = vec!["echo hello".to_string()];
         assert_eq!(expand_history("echo !! world", &hist), "echo echo hello world");
     }
+
+    #[test]
+    fn test_run_command_string_malformed_no_panic() {
+        let mut shell = Shell::new_with_opts(true).unwrap();
+        let _ = shell.run_command_string("( echo");
+        let _ = shell.run_command_string("if true; then");
+    }
 }
