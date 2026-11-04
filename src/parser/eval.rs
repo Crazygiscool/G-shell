@@ -17,6 +17,7 @@ use crate::commands::{echo, cd, pwd, r#type, env, test, help};
 
 pub const BUILTIN_REGISTRY: &[(&str, &str, &str)] = &[
     ("alias", "builtin", "define or display aliases"),
+    ("canvas", "builtin", "query or control the ArcOS spatial canvas"),
     ("cat", "builtin", "concatenate files and print on standard output"),
     ("cd", "builtin", "change the working directory"),
     ("clear", "builtin", "clear the terminal screen"),
@@ -30,8 +31,11 @@ pub const BUILTIN_REGISTRY: &[(&str, &str, &str)] = &[
     ("head", "builtin", "output the first part of files"),
     ("help", "builtin", "display help information"),
     ("history", "builtin", "display or manipulate command history"),
+    ("hub", "builtin", "connect to the ArcOS system manager"),
+    ("layout", "builtin", "upsert spatial canvas nodes"),
     ("ls", "builtin", "list directory contents"),
     ("mkdir", "builtin", "create directories"),
+    ("nodes", "builtin", "query the ArcOS node graph"),
     ("mv", "builtin", "move files and directories"),
     ("pwd", "builtin", "print name of current working directory"),
     ("rm", "builtin", "remove files or directories"),
@@ -201,12 +205,11 @@ fn eval_multi_command_pipeline(
 
             match child_cmd.spawn() {
                 Ok(mut child) => {
-                    if !is_last {
-                        if let Some(out) = child.stdout.take() {
+                    if !is_last
+                        && let Some(out) = child.stdout.take() {
                             prev_input = Some(out.as_raw_fd());
                             child_outputs.push(out);
                         }
-                    }
                     children.push(child);
                 }
                 Err(e) => {
@@ -309,7 +312,7 @@ fn run_command(
                 println!("type: type [name ...]");
                 println!("    Display information about command type.");
             } else if let Some(first) = args.first() {
-                r#type::r#type(first, &BUILTIN_REGISTRY);
+                r#type::r#type(first, BUILTIN_REGISTRY);
             } else {
                 eprintln!("type: missing operand");
                 return 1;
@@ -412,16 +415,17 @@ fn run_command(
                     let value = arg[eq_pos + 1..].trim_matches('\'').trim_matches('"').to_string();
                     alias::set_alias(name, value);
                 } else {
-                    if let Some(value) = alias::get_alias(*arg) {
+                    if let Some(value) = alias::get_alias(arg) {
                         println!("alias {}='{}'", arg, value);
                     }
                 }
             }
             0
         }
+        "canvas" => crate::commands::canvas::canvas(args),
         "unalias" => {
             for arg in args {
-                alias::remove_alias(*arg);
+                alias::remove_alias(arg);
             }
             0
         }
@@ -437,6 +441,12 @@ fn run_command(
             }
             0
         }
+        "hub" => crate::commands::ipc::ipc_builtin(args),
+        "layout" => {
+            let payload = args.join(" ");
+            crate::commands::ipc::ipc_builtin(&["send", &payload])
+        }
+        "nodes" => crate::commands::nodes::nodes(args),
         _ => {
             // User-defined function
             if functions::is_function(program) {
@@ -482,7 +492,7 @@ fn eval_script(script: &ScriptCommand, history_data: &[String], last_exit_code: 
             let pid = unsafe { libc::fork() };
             if pid == 0 {
                 let code = eval_program(program, history_data, last_exit_code);
-                std::process::exit(code.max(0).min(255));
+                std::process::exit(code.clamp(0, 255));
             } else if pid > 0 {
                 let mut status: libc::c_int = 0;
                 unsafe { libc::waitpid(pid, &mut status, 0); }
@@ -609,7 +619,7 @@ fn apply_redirects_to_cmd(cmd: &mut Command, redirects: &[Redirect]) {
             }
             RedirectKind::Append => {
                 use std::fs::OpenOptions;
-                if let Ok(f) = OpenOptions::new().write(true).create(true).append(true).open(&r.target) {
+                if let Ok(f) = OpenOptions::new().create(true).append(true).open(&r.target) {
                     if r.fd == 1 { cmd.stdout(f); }
                     else if r.fd == 2 { cmd.stderr(f); }
                 }
@@ -626,8 +636,8 @@ fn apply_redirects_to_cmd(cmd: &mut Command, redirects: &[Redirect]) {
             }
             RedirectKind::Dup => {
                 // 2>&1 for a spawned child: dup the source fd into the stream.
-                if let Ok(src) = r.target.parse::<i32>() {
-                    if src >= 0 {
+                if let Ok(src) = r.target.parse::<i32>()
+                    && src >= 0 {
                         let d = unsafe { libc::dup(src) };
                         if d >= 0 {
                             let f = unsafe { File::from_raw_fd(d) };
@@ -639,7 +649,6 @@ fn apply_redirects_to_cmd(cmd: &mut Command, redirects: &[Redirect]) {
                             }
                         }
                     }
-                }
             }
         }
     }
@@ -665,16 +674,13 @@ fn alias_expand(expanded: &mut Vec<String>, last_exit_code: i32) {
         let prog = crate::parser::parser::parse(&toks);
         let mut fresh: Vec<String> = Vec::new();
         for node in &prog.commands {
-            if let Some(p) = node.and_or.nodes.first() {
-                if let CommandNode::Pipeable(pipe) = &p.command {
-                    if let Some(sc) = pipe.commands.first() {
-                        if !sc.words.is_empty() {
+            if let Some(p) = node.and_or.nodes.first()
+                && let CommandNode::Pipeable(pipe) = &p.command
+                    && let Some(sc) = pipe.commands.first()
+                        && !sc.words.is_empty() {
                             fresh.extend(sc.words.clone());
                             break;
                         }
-                    }
-                }
-            }
         }
         if fresh.is_empty() || fresh[0] == name {
             return;

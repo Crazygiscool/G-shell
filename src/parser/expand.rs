@@ -16,11 +16,10 @@ fn expand_tilde(token: &str) -> String {
     if !token.starts_with('~') {
         return token.to_string();
     }
-    if token == "~" || token.starts_with("~/") {
-        if let Ok(home) = env::var("HOME") {
+    if (token == "~" || token.starts_with("~/"))
+        && let Ok(home) = env::var("HOME") {
             return home + &token[1..];
         }
-    }
     token.to_string()
 }
 
@@ -142,7 +141,7 @@ fn execute_subshell(cmd: &str, last_exit_code: i32) -> String {
         drop(writer);
         drop(reader);
         let code = crate::parser::eval::eval_program(&program, &[], last_exit_code);
-        std::process::exit(code.min(255).max(0));
+        std::process::exit(code.clamp(0, 255));
     } else if pid > 0 {
         drop(writer);
         let mut out = String::new();
@@ -189,11 +188,10 @@ fn expand_var(name: &str) -> String {
 
 pub fn expand_prompt(template: &str, last_exit_code: i32) -> String {
     // Check for oh-my-posh theme first
-    if let Ok(path) = env::var("GS_OH_MY_POSH_THEME") {
-        if let Some(format_str) = crate::parser::theme::load_omp_theme(&path) {
+    if let Ok(path) = env::var("GS_OH_MY_POSH_THEME")
+        && let Some(format_str) = crate::parser::theme::load_omp_theme(&path) {
             return crate::parser::theme::render_prompt(&format_str, last_exit_code);
         }
-    }
     // Check for GS_PROMPT_FORMAT
     if let Ok(format) = env::var("GS_PROMPT_FORMAT") {
         return crate::parser::theme::render_prompt(&format, last_exit_code);

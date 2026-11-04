@@ -108,10 +108,11 @@ impl Shell {
             if trimmed == "exit" {
                 break;
             }
-            let tokens = tokenize(trimmed);
-            if tokens.is_empty() {
-                continue;
+            let (tokens, tok_errors) = crate::parser::tokenize::tokenize_with_errors(trimmed);
+            for err in tok_errors {
+                eprintln!("gsh: {}", err);
             }
+            if tokens.is_empty() { continue; }
             let program = parser::parse(&tokens);
             last = eval::eval_program(&program, &[], last);
         }
@@ -159,10 +160,16 @@ impl Shell {
                 continue;
             }
             let command = self.process_heredocs(trimmed);
-            let tokens = tokenize(&command);
-            if tokens.is_empty() { continue; }
-            let program = parser::parse(&tokens);
-            self.last_exit_code = eval::eval_program(&program, &[], self.last_exit_code);
+                let (tokens, tok_errors) = crate::parser::tokenize::tokenize_with_errors(&command);
+                for err in tok_errors {
+                    eprintln!("gsh: {}", err);
+                }
+                if tokens.is_empty() { continue; }
+                let (program, parse_errors) = crate::parser::parser::parse_with_errors(&tokens);
+                for err in parse_errors {
+                    eprintln!("gsh: {}", err);
+                }
+                self.last_exit_code = eval::eval_program(&program, &[], self.last_exit_code);
         }
     }
 
@@ -196,15 +203,14 @@ impl Shell {
                     let _ = self.rl.add_history_entry(&history_line);
 
                     let command = self.process_heredocs(full_trimmed);
-                    let tokens = tokenize(&command);
+                    let (tokens, tok_errors) = crate::parser::tokenize::tokenize_with_errors(&command);
+                    for err in tok_errors { eprintln!("gsh: syntax error: {}", err); }
                     if tokens.is_empty() { continue; }
-
-                    // Check for history command with flags
                     if self.check_simple_history(&tokens).is_some() {
                         let args: Vec<String> = tokens.iter().skip(1).map(|t| t.value.clone()).collect();
                         match history_cmd(&history_vec, &args, &self.history_file) {
                             HistoryAction::Load(path) => {
-                                if let Err(_) = self.rl.load_history(&path) {
+                                if self.rl.load_history(&path).is_err() {
                                     eprintln!("history: {}: No such file or directory", path);
                                 }
                                 self.history_start_index = self.rl.history().len();
@@ -225,7 +231,8 @@ impl Shell {
                         continue;
                     }
 
-                    let program = parser::parse(&tokens);
+                    let (program, parse_errors) = crate::parser::parser::parse_with_errors(&tokens);
+                    for err in parse_errors { eprintln!("gsh: syntax error: {}", err); }
 
                     for complete_cmd in &program.commands {
                         if complete_cmd.background {
@@ -297,7 +304,7 @@ impl Shell {
     }
 
     fn check_simple_history(&self, tokens: &[crate::parser::ast::Token]) -> Option<bool> {
-        if tokens.len() >= 1
+        if !tokens.is_empty()
             && tokens[0].kind == TokenKind::Word
             && tokens[0].value == "history"
             && tokens.iter().all(|t| t.kind == TokenKind::Word)
@@ -312,9 +319,9 @@ impl Shell {
         use std::process::{Command, Stdio};
         use std::os::unix::process::CommandExt;
 
-        if let Some(node) = cmd.and_or.nodes.first() {
-            if let CommandNode::Pipeable(pipeline) = &node.command {
-                if pipeline.commands.len() == 1 && !pipeline.negated {
+        if let Some(node) = cmd.and_or.nodes.first()
+            && let CommandNode::Pipeable(pipeline) = &node.command
+                && pipeline.commands.len() == 1 && !pipeline.negated {
                     let simple = &pipeline.commands[0];
                     if simple.words.is_empty() { return; }
 
@@ -343,8 +350,6 @@ impl Shell {
                         eprintln!("{}: command not found", program);
                     }
                 }
-            }
-        }
     }
 
     fn process_heredocs(&mut self, command: &str) -> String {
@@ -444,11 +449,10 @@ fn expand_history(input: &str, history: &[String]) -> String {
                 }
                 Some('$') => {
                     chars.next();
-                    if let Some(last) = history.last() {
-                        if let Some(word) = last.split_whitespace().last() {
+                    if let Some(last) = history.last()
+                        && let Some(word) = last.split_whitespace().last() {
                             result.push_str(word);
                         }
-                    }
                 }
                 Some('?') => {
                     chars.next();
@@ -463,11 +467,10 @@ fn expand_history(input: &str, history: &[String]) -> String {
                             break;
                         }
                     }
-                    if let Ok(n) = num_str.parse::<usize>() {
-                        if n > 0 && n <= history.len() {
+                    if let Ok(n) = num_str.parse::<usize>()
+                        && n > 0 && n <= history.len() {
                             result.push_str(&history[n - 1]);
                         }
-                    }
                 }
                 _ => {
                     result.push('!');
@@ -585,5 +588,12 @@ mod tests {
     fn test_expand_history_mixed() {
         let hist = vec!["echo hello".to_string()];
         assert_eq!(expand_history("echo !! world", &hist), "echo echo hello world");
+    }
+
+    #[test]
+    fn test_run_command_string_malformed_no_panic() {
+        let mut shell = Shell::new_with_opts(true).unwrap();
+        let _ = shell.run_command_string("( echo");
+        let _ = shell.run_command_string("if true; then");
     }
 }

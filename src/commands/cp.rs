@@ -91,9 +91,5 @@ fn copy_tree(src: &str, dest: &str) {
 }
 
 pub fn move_file(src: &str, dest: &str) -> bool {
-    if copy_file(src, dest) && syscall::unlink(src) >= 0 {
-        true
-    } else {
-        false
-    }
+    copy_file(src, dest) && syscall::unlink(src) >= 0
 }

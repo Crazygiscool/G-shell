@@ -30,7 +30,7 @@ impl Style {
                 "underline" => {}
                 _ => {
                     if word.starts_with("on_") {
-                        style.bg = Some(word[3..].to_string());
+                        style.bg = Some(word.strip_prefix("on_").unwrap_or("").to_string());
                     } else if style.fg.is_none() {
                         style.fg = Some(word.to_string());
                     }
@@ -80,15 +80,14 @@ fn color_to_ansi(name: &str, bg: bool) -> String {
         "bright_white" => format!("{};5;15", base),
         _ => {
             // Check for hex color #rrggbb
-            if name.starts_with('#') && name.len() == 7 {
-                if let (Ok(r), Ok(g), Ok(b)) = (
+            if name.starts_with('#') && name.len() == 7
+                && let (Ok(r), Ok(g), Ok(b)) = (
                     u8::from_str_radix(&name[1..3], 16),
                     u8::from_str_radix(&name[3..5], 16),
                     u8::from_str_radix(&name[5..7], 16),
                 ) {
                     return format!("{};2;{};{};{}", base, r, g, b);
                 }
-            }
             // Try as ANSI 0-255
             if let Ok(n) = name.parse::<u8>() {
                 return format!("{};5;{}", base, n);
@@ -115,11 +114,10 @@ pub fn render_host() -> String {
 pub fn render_path() -> String {
     let cwd = env::current_dir().ok();
     let cwd = cwd.as_deref().and_then(|p| p.to_str()).unwrap_or("?");
-    if let Ok(home) = env::var("HOME") {
-        if cwd.starts_with(&home) {
+    if let Ok(home) = env::var("HOME")
+        && cwd.starts_with(&home) {
             return "~".to_string() + &cwd[home.len()..];
         }
-    }
     cwd.to_string()
 }
 
@@ -282,16 +280,14 @@ pub fn load_omp_theme(path: &str) -> Option<String> {
                     let mapped = map_omp_segment(seg_type, seg)?;
                     let mut style_str = String::new();
 
-                    if let Some(c) = fg {
-                        if c != "transparent" && c != "default" {
+                    if let Some(c) = fg
+                        && c != "transparent" && c != "default" {
                             style_str.push_str(c);
                         }
-                    }
-                    if let Some(c) = bg {
-                        if c != "transparent" && c != "default" {
+                    if let Some(c) = bg
+                        && c != "transparent" && c != "default" {
                             style_str.push_str(&format!(" on_{}", c));
                         }
-                    }
 
                     if style_str.is_empty() {
                         block_parts.push(mapped);
@@ -409,11 +405,10 @@ fn parse_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<Stri
                     't' => s.push('\t'),
                     'u' => {
                         let hex: String = chars.by_ref().take(4).collect();
-                        if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                            if let Ok(c) = char::try_from(cp) {
+                        if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                            && let Ok(c) = char::try_from(cp) {
                                 s.push(c);
                             }
-                        }
                     }
                     c => s.push(c),
                 }

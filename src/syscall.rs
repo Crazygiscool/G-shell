@@ -129,7 +129,7 @@ pub fn realtime_clock() -> Option<(i64, u32)> {
     if r < 0 {
         None
     } else {
-        Some((ts.tv_sec as i64, ts.tv_nsec as u32))
+        Some((ts.tv_sec, ts.tv_nsec as u32))
     }
 }
 

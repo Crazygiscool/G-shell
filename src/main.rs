@@ -1,4 +1,5 @@
 mod commands;
+mod ipc;
 mod parser;
 mod syscall;
 
@@ -90,7 +91,7 @@ fn main() -> rustyline::Result<()> {
 
     if let Some(cmd) = cli.command {
         shell.run_command_string(&cmd);
-        std::process::exit(shell.last_exit_code.max(0).min(255));
+        std::process::exit(shell.last_exit_code.clamp(0, 255));
     }
 
     if let Some(script) = cli.script {
@@ -102,7 +103,7 @@ fn main() -> rustyline::Result<()> {
             }
         };
         shell.run_command_string(&content);
-        std::process::exit(shell.last_exit_code.max(0).min(255));
+        std::process::exit(shell.last_exit_code.clamp(0, 255));
     }
 
     // Interactive REPL (the kernel launches gsh with no arguments).

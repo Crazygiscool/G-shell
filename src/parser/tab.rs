@@ -61,7 +61,7 @@ pub fn complete_command(prefix: &str) -> Vec<CompletionCandidate> {
 }
 
 pub fn complete_variable(prefix: &str) -> Vec<CompletionCandidate> {
-    let var_name = if prefix.starts_with('$') { &prefix[1..] } else { prefix };
+    let var_name = prefix.strip_prefix("$").unwrap_or(prefix);
     let prefix_lower = var_name.to_lowercase();
     let mut matches = Vec::new();
 

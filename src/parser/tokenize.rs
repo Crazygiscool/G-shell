@@ -1,6 +1,11 @@
 use crate::parser::ast::{Token, TokenKind};
 
 pub fn tokenize(input: &str) -> Vec<Token> {
+    tokenize_with_errors(input).0
+}
+
+pub fn tokenize_with_errors(input: &str) -> (Vec<Token>, Vec<String>) {
+    let mut errors = Vec::new();
     let mut tokens = Vec::new();
     let mut cur = String::new();
 
@@ -65,7 +70,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
                     let mut depth = 1i32;
                     cur.push('$');
                     cur.push('(');
-                    while let Some(ch) = chars.next() {
+                    for ch in chars.by_ref() {
                         cur.push(ch);
                         match ch {
                             '(' => depth += 1,
@@ -213,7 +218,10 @@ pub fn tokenize(input: &str) -> Vec<Token> {
     }
 
     flush_word(&mut cur, &mut tokens);
-    tokens
+    if in_single || in_double {
+        errors.push("syntax error: unterminated quote".to_string());
+    }
+    (tokens, errors)
 }
 
 /// Compatibility shim: returns string values for code that hasn't migrated yet
@@ -497,5 +505,13 @@ mod tests {
                 Token::new(TokenKind::RParen, ")"),
             ]
         );
+    }
+
+    #[test]
+    fn test_unterminated_quote_error() {
+        let (tokens, errors) = tokenize_with_errors("echo 'abc");
+        assert!(!tokens.is_empty());
+        assert!(!errors.is_empty());
+        assert!(errors[0].contains("unterminated quote"));
     }
 }

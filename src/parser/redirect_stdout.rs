@@ -21,7 +21,7 @@ pub fn redirect_stdout_to(filename: &str) -> Option<RawFd> {
 
 pub fn redirect_stdout_append(filename: &str) -> Option<RawFd> {
         let file = OpenOptions::new()
-            .write(true)
+            
             .create(true)
             .append(true)
             .open(filename)
@@ -57,7 +57,7 @@ pub fn redirect_stderr_to(filename: &str) -> Option<RawFd> {
 
 pub fn redirect_stderr_append(filename: &str) -> Option<RawFd> {
         let file = OpenOptions::new()
-            .write(true)
+            
             .create(true)
             .append(true)
             .open(filename)
