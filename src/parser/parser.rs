@@ -3,11 +3,16 @@ use crate::parser::ast::*;
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    pub errors: Vec<String>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
-        Parser { tokens, pos: 0 }
+        Parser { tokens, pos: 0, errors: Vec::new() }
+    }
+
+    pub fn take_errors(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.errors)
     }
 
     fn peek(&self) -> Option<&'a Token> {
@@ -91,8 +96,8 @@ impl<'a> Parser<'a> {
         }
 
         // Check for scripting keywords
-        if let Some(token) = self.peek() {
-            if token.kind == TokenKind::Word {
+        if let Some(token) = self.peek()
+            && token.kind == TokenKind::Word {
                 match token.value.as_str() {
                     "if" => { self.advance(); return CommandNode::Compound(ScriptCommand::If(self.parse_if())); }
                     "for" => { self.advance(); return CommandNode::Compound(ScriptCommand::For(self.parse_for())); }
@@ -102,7 +107,6 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
             }
-        }
 
         // Bash-style function: `name() { ... }` or `name() cmd`
         if self.peek_bash_function() {
@@ -148,15 +152,14 @@ impl<'a> Parser<'a> {
             if token.kind != TokenKind::Word {
                 break;
             }
-            if let Some(eq_pos) = token.value.find('=') {
-                if eq_pos > 0 && token.value[..eq_pos].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            if let Some(eq_pos) = token.value.find('=')
+                && eq_pos > 0 && token.value[..eq_pos].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     let name = token.value[..eq_pos].to_string();
                     let value = token.value[eq_pos + 1..].to_string();
                     env_overrides.push((name, value));
                     self.advance();
                     continue;
                 }
-            }
             break;
         }
 
@@ -224,8 +227,11 @@ impl<'a> Parser<'a> {
     fn parse_subshell(&mut self) -> ScriptCommand {
         self.advance(); // consume '('
         let program = self.parse_compound_list();
-        self.expect(TokenKind::RParen)
-            .unwrap_or_else(|| panic!("Expected )"));
+        if self.peek().map(|t| t.kind == TokenKind::RParen).unwrap_or(false) {
+            self.advance();
+        } else {
+            self.errors.push("syntax error: expected ')'".to_string());
+        }
         ScriptCommand::Subshell(program)
     }
 
@@ -420,6 +426,7 @@ impl<'a> Parser<'a> {
         if token.kind == TokenKind::Word && token.value == word {
             self.advance()
         } else {
+            self.errors.push(format!("syntax error: expected '{}'", word));
             None
         }
     }
@@ -444,7 +451,7 @@ fn parse_fd_from_value(value: &str, kind: TokenKind) -> i32 {
             _ => 1,
         }
     } else {
-        num_part.parse().unwrap_or_else(|_| {
+        num_part.parse().unwrap_or({
             match kind {
                 TokenKind::Less | TokenKind::DLass => 0,
                 _ => 1,
@@ -454,7 +461,13 @@ fn parse_fd_from_value(value: &str, kind: TokenKind) -> i32 {
 }
 
 pub fn parse(tokens: &[Token]) -> Program {
-    Parser::new(tokens).parse_program()
+    parse_with_errors(tokens).0
+}
+
+pub fn parse_with_errors(tokens: &[Token]) -> (Program, Vec<String>) {
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program();
+    (program, parser.take_errors())
 }
 
 
@@ -793,5 +806,12 @@ mod tests {
         assert_eq!(cmds[0].words, vec![w("echo"), w("hello")]);
         assert_eq!(cmds[0].redirects.len(), 1);
         assert_eq!(cmds[1].words, vec![w("cat")]);
+    }
+
+    #[test]
+    fn test_parse_malformed_reports_without_panic() {
+        let (program, errors) = parse_with_errors(&tokenize("(echo true"));
+        let _ = program;
+        assert!(!errors.is_empty());
     }
 }
