@@ -40,9 +40,8 @@ pub fn test_builtin(input_args: &[&str]) -> i32 {
             if args.len() < 2 { return 1; }
             if Path::new(args[1]).is_file() {
                 use std::os::unix::fs::MetadataExt;
-                if let Ok(meta) = std::fs::metadata(args[1]) {
-                    if meta.mode() & 0o111 != 0 { return 0; }
-                }
+                if let Ok(meta) = std::fs::metadata(args[1])
+                    && meta.mode() & 0o111 != 0 { return 0; }
             }
             1
         }

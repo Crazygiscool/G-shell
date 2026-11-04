@@ -105,9 +105,9 @@ fn head_fd(fd: RawFd, n: usize) -> i32 {
         }
     }
     if line_count > n {
-        let _ = print!("{}", &out[..written]);
+        print!("{}", &out[..written]);
     } else {
-        let _ = print!("{}", out);
+        print!("{}", out);
     }
     0
 }

@@ -11,11 +11,10 @@ fn build_cache() -> Vec<String> {
         for dir in std::env::split_paths(&paths) {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if !names.iter().any(|n| n == name) {
+                    if let Some(name) = entry.file_name().to_str()
+                        && !names.iter().any(|n| n == name) {
                             names.push(name.to_string());
                         }
-                    }
                 }
             }
         }
