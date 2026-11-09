@@ -18,7 +18,7 @@ const DEFAULT_RC: &str = "# G-shell init file — sourced on startup\n\
     # Set GSHELLRC to a custom path to override this file.\n\
     \n\
     # Welcome banner\n\
-    fastfetch\n\
+    command -v fastfetch >/dev/null 2>&1 && fastfetch\n\
     \n\
     # Aliases\n\
     alias ll='ls -lah'\n\
